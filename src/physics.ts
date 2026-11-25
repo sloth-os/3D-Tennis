@@ -1,4 +1,4 @@
-import { COURT, SHOTS, SURFACES, clamp, type Aim, type Shot, type Surface, type Vec3 } from './config.ts'
+import { COURT, SHOTS, SURFACES, clamp, type Aim, type Shot, type Surface, type Trajectory, type Vec3 } from './config.ts'
 
 export const GRAVITY = 9.81
 export const BALL_MASS = 0.057
@@ -146,9 +146,13 @@ export function launchTo(start: Vec3, end: Aim, duration: number, spin: number, 
   return makeBall(start, velocity, spin, sideSpin)
 }
 
-export function shotBall(start: Vec3, aim: Aim, shot: Shot, serve: boolean, quality: number): Ball {
+export function shotBall(start: Vec3, aim: Aim, shot: Shot, serve: boolean, quality: number,
+  trajectory: Trajectory = 'drive', durationScale = 1): Ball {
   const preset = SHOTS[shot]
-  const duration = (serve ? preset.serveDuration : preset.duration) + (1 - quality) * 0.09
+  const baseDuration = serve ? preset.serveDuration : {
+    drive: preset.duration, lob: 1.91, drop: 1.50, volley: .94 + Math.max(0, .56 - start.y) * .46, smash: .73,
+  }[trajectory]
+  const duration = baseDuration * durationScale + (1 - quality) * 0.09
   const sliceServe = serve && shot === 'slice'
   // Aim describes the calm-air landing. Wind and off-center timing change the result.
   return launchTo(start, aim, duration, sliceServe ? 510 : preset.spin, 0, sliceServe ? 1800 : 0)

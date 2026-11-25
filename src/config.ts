@@ -33,9 +33,10 @@ export const WINDS = {
 
 export type Surface = keyof typeof SURFACES
 export type Shot = keyof typeof SHOTS
+export type Trajectory = 'drive' | 'lob' | 'drop' | 'volley' | 'smash'
 export type Wind = keyof typeof WINDS
 export type DrillId = keyof typeof DRILLS
-export type Technique = 'forehand' | 'backhand' | 'serve' | 'footwork'
+export type Technique = 'forehand' | 'backhand' | 'serve' | 'footwork' | 'volley' | 'backhandVolley' | 'overhead' | 'halfVolley' | 'lob' | 'drop'
 export type Vec3 = { x: number; y: number; z: number }
 export type Aim = { x: number; z: number }
 export type Zone = { xMin: number; xMax: number; zMin: number; zMax: number }

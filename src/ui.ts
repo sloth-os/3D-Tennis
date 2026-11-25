@@ -3,6 +3,7 @@ import { icon } from './icons.ts'
 import { REFERENCES, TECHNIQUES } from './coaching.ts'
 import { COURT_CAMERAS, LAB_CAMERAS } from './cameras.ts'
 import { MUSCLES } from './motion.ts'
+import { ntrpMarkup, ntrpReferenceMarkup } from './ntrp-ui.ts'
 
 const options = (labels: Record<string, string>) => Object.entries(labels).map(([key, value]) =>
   `<option value="${key}">${value}</option>`).join('')
@@ -52,7 +53,7 @@ const training = `
       </div>
 
       <aside class="hud-panel hud-left session-panel" id="session-rail" aria-labelledby="drill-title">
-        <div class="section-kicker">${icon('target', 16)} Practice session</div>
+        <div class="section-kicker">${icon('target', 16)} <span id="practice-heading">Practice session</span></div>
         <h1 id="drill-title">Forehand Fundamentals</h1>
         <p class="hud-copy" id="drill-description"></p>
         <div class="session-score">
@@ -76,6 +77,7 @@ const training = `
           </div>
         </div>
         <a class="quiet-link" id="study-drill" href="#technique">Study the motion ${icon('right', 15)}</a>
+        <a class="quiet-link" id="return-ntrp" href="#ntrp"><span>NTRP Skill Path</span> ${icon('right', 15)}</a>
       </aside>
 
       <aside class="hud-panel hud-right force-panel" id="force-rail" aria-labelledby="force-title">
@@ -261,6 +263,7 @@ export function appMarkup(): string {
         </a>
         <nav class="main-nav" aria-label="Main navigation">
           <a href="#training" data-nav="training">${icon('court', 17)}<span>Training</span></a>
+          <a href="#ntrp" data-nav="ntrp">${icon('layers', 17)}<span>Skill Path</span></a>
           <a href="#technique" data-nav="technique">${icon('body', 17)}<span>Technique Lab</span></a>
           <a href="#guide" data-nav="guide">${icon('book', 17)}<span>Field Guide</span></a>
         </nav>
@@ -272,7 +275,10 @@ export function appMarkup(): string {
         </div>
       </div>
     </header>
-    <main id="main-content" class="main-shell" tabindex="-1">${training}${techniques}${guide}</main>
+    <main id="main-content" class="main-shell" tabindex="-1">${training}
+      ${ntrpMarkup(tools('ntrp-camera', 'Skill path camera', COURT_CAMERAS, 'ntrp-panel'), orbit('ntrp-orbit'))}
+      ${techniques}${guide}</main>
+    ${ntrpReferenceMarkup()}
     <dialog id="controls-dialog" class="controls-dialog" aria-labelledby="controls-title">
       <form method="dialog">
         <div class="dialog-head"><div><p class="section-kicker">${icon('court', 16)} Practice controls</p><h2 id="controls-title">Take the court</h2></div>

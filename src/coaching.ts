@@ -1,7 +1,14 @@
 import type { Technique } from './config.ts'
+import { MOTION_DURATION } from './motion.ts'
 
 type Chapter = { label: string; title: string; text: string; watch: string; time: number }
 type Lesson = { label: string; summary: string; duration: number; phases: Chapter[] }
+
+function lesson(technique: Technique, label: string, summary: string, phases: [string, string, string, string][]): Lesson {
+  const times = [.02, .24, .43, .62, .81]
+  return { label, summary, duration: MOTION_DURATION[technique],
+    phases: phases.map(([label, title, text, watch], index) => ({ label, title, text, watch, time: times[index] })) }
+}
 
 export const TECHNIQUES: Record<Technique, Lesson> = {
   forehand: {
@@ -68,6 +75,48 @@ export const TECHNIQUES: Record<Technique, Lesson> = {
         watch: 'The upper body returns to an even, ready position.', time: .84 },
     ],
   },
+  volley: lesson('volley', 'Forehand Volley', 'A compact block takes the ball out of the air. Watch the feet bring a quiet racket face to contact.', [
+    ['Ready', 'Set the racket in front', 'Use a neutral grip and keep the racket head where you can see it.', 'Both feet are available for the first step.'],
+    ['Split', 'Read the side', 'Split as the opponent hits, then turn slightly toward the forehand.', 'A small turn sets the racket without a long backswing.'],
+    ['Step', 'Bring your body to the ball', 'Move forward and slightly across to meet the feed.', 'The knees bend as the lead foot starts to plant.'],
+    ['Block', 'Take it early', 'Meet the ball in front with a firm, slightly open face. Use the incoming pace.', 'The racket stays ahead of the elbow.'],
+    ['Reset', 'Cover the next reply', 'Finish briefly in the direction of travel, then return to ready.', 'There is room for a second volley without a long recovery.'],
+  ]),
+  backhandVolley: lesson('backhandVolley', 'Backhand Volley', 'Turn the shoulder and guide a short block on the backhand side before the ball bounces.', [
+    ['Ready', 'Balance your stance', 'Start with soft knees and the racket centered in front.', 'The non-hitting hand steadies the throat.'],
+    ['Turn', 'Show your hitting shoulder', 'Turn to the backhand and set the racket face. Keep the motion short.', 'The chest turns before the arm moves forward.'],
+    ['Step', 'Close under control', 'Step diagonally to the ball. Lower through the legs when the feed is low.', 'The head and shoulders stay balanced over the base.'],
+    ['Block', 'Meet it in front', 'Use a stable face and the pace of the feed to direct the shot.', 'The hitting side extends as the other arm balances.'],
+    ['Reset', 'Recover the racket', 'Prepare for another volley before closing farther.', 'The racket returns in front of the body.'],
+  ]),
+  halfVolley: lesson('halfVolley', 'Half-Volley', 'Pick up the rising ball just after it touches the court. The legs lower the strike zone.', [
+    ['Read', 'Spot the low bounce', 'Recognize when the ball will land near your feet before you can volley it.', 'The player begins to lower early.'],
+    ['Lower', 'Bend through the legs', 'Create room between the hips and the bounce with a short step.', 'The hips drop as the knees flex.'],
+    ['Set', 'Shorten the swing', 'Keep the racket low and the motion compact.', 'The strings are already close to the expected height.'],
+    ['Lift', 'Catch the early rise', 'Guide the face under and forward through the rising ball.', 'The racket travels a short distance through a low contact.'],
+    ['Reset', 'Rise and recover', 'Stand back into balance and cover the next angle.', 'The chest returns to a neutral position.'],
+  ]),
+  overhead: lesson('overhead', 'Overhead', 'Track a lob, get behind it, and reach high without losing balance.', [
+    ['Read', 'Recognize the lob', 'Watch the ball as it clears the net and start turning sideways.', 'The eyes stay up while the stance changes.'],
+    ['Turn', 'Point and adjust', 'Use the free arm as a reference and turn the shoulders. Take adjustment steps behind the ball.', 'The trunk turns while the free hand reaches up.'],
+    ['Load', 'Make room overhead', 'Set the racket behind the hitting shoulder and keep space in front of you.', 'The hitting elbow rises before the racket head.'],
+    ['Reach', 'Strike high in front', 'Extend upward and guide the racket through the ball toward the target.', 'The free arm folds as the hitting side unfolds.'],
+    ['Land', 'Regain balance', 'Let the racket finish across the body and land ready for a reply.', 'The hips and shoulders face the court again.'],
+  ]),
+  lob: lesson('lob', 'Topspin Lob', 'Lift the ball over a net player and use spin to bring it down before the baseline.', [
+    ['Read', 'Spot the net player', 'Look for room above the opponent and leave a clear landing margin.', 'The legs make space before the turn.'],
+    ['Turn', 'Prepare like a drive', 'Turn the shoulders with the racket as you would for a groundstroke.', 'The torso turns before the racket accelerates.'],
+    ['Load', 'Drop below the ball', 'Set the racket below the expected strike height.', 'The hips load while the racket head lowers.'],
+    ['Lift', 'Brush up with height', 'Send the ball up and forward. Topspin helps the high flight drop sooner.', 'The racket rises through contact.'],
+    ['Recover', 'Use the extra time', 'Return to a position that covers the likely overhead or groundstroke reply.', 'The finish stays balanced.'],
+  ]),
+  drop: lesson('drop', 'Drop Shot', 'Soften the flight with backspin and aim for a short first bounce.', [
+    ['Read', 'Check the open space', 'A drop shot makes more sense when the opponent is deep and you are balanced.', 'The player sets up before changing the swing.'],
+    ['Turn', 'Keep the preparation familiar', 'Use a similar turn to a drive so the decision stays late.', 'The first motion resembles a groundstroke.'],
+    ['Set', 'Open the face slightly', 'Prepare a compact swing that can absorb some incoming pace.', 'The racket stays close to the contact height.'],
+    ['Touch', 'Brush gently under the ball', 'Guide the ball over the net with backspin and a short finish.', 'The racket slows through a controlled contact.'],
+    ['Close', 'Prepare for the pickup', 'Move to cover the short reply and allow space for a lob.', 'The player returns to a balanced ready stance.'],
+  ]),
 }
 
 export const REFERENCES = [

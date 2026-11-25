@@ -3,7 +3,7 @@ import type { Vec3 } from './config.ts'
 import { MUSCLES, magnitude, type MuscleGroup } from './motion.ts'
 
 import { FORCE_COLORS } from './analysis-colors.ts'
-export type LabelKey = 'target' | 'contact' | 'gravity' | 'drag' | 'magnus' | 'impact' | MuscleGroup
+export type LabelKey = 'target' | 'contact' | 'gravity' | 'drag' | 'magnus' | 'impact' | 'partner' | 'recovery' | 'net-player' | MuscleGroup
 export interface WorldLabel { key: LabelKey; text: string; position: Vec3 }
 export type BodyState = ReturnType<typeof import('./motion.ts').analyzeMotion>
 export type FlightForces = ReturnType<typeof import('./physics.ts').flightForces>

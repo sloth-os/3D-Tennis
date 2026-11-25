@@ -68,6 +68,78 @@ const phases: Record<Technique, Frame[]> = {
     { ...ready, t: .83, hips: .94, stride: .12, hipYaw: .12, chestYaw: -.09 },
     end,
   ],
+  volley: [
+    ready,
+    { ...ready, t: .24, hipYaw: -.12, chestYaw: -.27, stride: .07,
+      hand: [.44, 1.23, -.28], elbow: [.46, 1.13, -.08], racket: [.14, .68, -.39] },
+    { ...ready, t: .43, hips: .86, hipYaw: -.15, chestYaw: -.33, stride: .14,
+      hand: [.54, 1.14, -.28], elbow: [.45, 1.09, -.12], racket: [.17, .68, -.29] },
+    { ...ready, t: .62, hips: .92, hipYaw: .05, chestYaw: -.10, stride: .23,
+      hand: [.60, 1.10, -.47], elbow: [.41, 1.10, -.24], racket: [.23, .70, -.41] },
+    { ...ready, t: .81, hips: .96, hipYaw: .21, chestYaw: .10, stride: .24,
+      hand: [.34, 1.17, -.67], elbow: [.35, 1.14, -.34], racket: [.05, .67, -.58] },
+    end,
+  ],
+  backhandVolley: [
+    ready,
+    { ...ready, t: .24, hipYaw: .18, chestYaw: .44, stride: -.07,
+      hand: [-.25, 1.22, -.31], elbow: [.14, 1.13, -.19], free: [-.38, 1.36, -.26], racket: [-.32, .68, -.13] },
+    { ...ready, t: .43, hips: .87, hipYaw: .28, chestYaw: .56, stride: -.15,
+      hand: [-.38, 1.08, -.21], elbow: [-.04, 1.12, -.22], free: [-.54, 1.20, -.09], racket: [-.41, .62, -.22] },
+    { ...ready, t: .62, hips: .89, hipYaw: .14, chestYaw: .37, stride: -.22,
+      hand: [-.40, 1.03, -.43], elbow: [-.11, 1.10, -.29], free: [-.53, 1.18, .14], racket: [-.38, .60, -.37] },
+    { ...ready, t: .81, hips: .94, hipYaw: .07, chestYaw: .23, stride: -.21,
+      hand: [-.39, 1.12, -.61], elbow: [-.08, 1.13, -.30], free: [-.56, 1.23, .18], racket: [-.31, .54, -.54] },
+    end,
+  ],
+  overhead: [
+    ready,
+    { ...ready, t: .24, hips: .97, hipYaw: -.81, chestYaw: -.90, stride: .20,
+      hand: [.45, 1.50, .31], elbow: [.64, 1.36, .24], free: [-.23, 1.90, -.38], racket: [.17, .72, .27] },
+    { ...ready, t: .43, hips: .91, hipYaw: -.55, chestYaw: -.75, stride: .24,
+      hand: [.29, 1.51, .48], elbow: [.65, 1.68, .26], free: [-.24, 1.97, -.37], racket: [-.12, -.83, .10] },
+    { ...ready, t: .62, hips: 1.07, hipYaw: .25, chestYaw: .07, stride: .19,
+      hand: [.32, 2.02, -.23], elbow: [.39, 1.81, -.02], free: [-.28, 1.41, -.28], racket: [.15, .77, -.36] },
+    { ...ready, t: .81, hips: .98, hipYaw: .66, chestYaw: .77, stride: .28,
+      hand: [-.42, 1.11, -.50], elbow: [-.08, 1.35, -.31], free: [-.47, 1.30, .10], racket: [-.41, -.50, -.22] },
+    end,
+  ],
+  halfVolley: [
+    ready,
+    { ...ready, t: .24, hips: .84, hipYaw: -.17, chestYaw: -.33, stride: .09,
+      hand: [.46, .86, -.28], elbow: [.40, 1.01, -.09], racket: [.32, -.52, -.35] },
+    { ...ready, t: .43, hips: .70, hipYaw: -.19, chestYaw: -.44, stride: .21,
+      hand: [.50, .63, -.32], elbow: [.43, .87, -.13], racket: [.36, -.62, -.35] },
+    { ...ready, t: .62, hips: .71, hipYaw: .02, chestYaw: -.20, stride: .25,
+      hand: [.57, .64, -.50], elbow: [.41, .85, -.26], racket: [.39, -.49, -.56] },
+    { ...ready, t: .81, hips: .90, hipYaw: .28, chestYaw: .22, stride: .26,
+      hand: [.50, 1.00, -.55], elbow: [.39, .99, -.26], racket: [.31, .35, -.65] },
+    end,
+  ],
+  lob: [
+    ready,
+    { ...ready, t: .24, hipYaw: -.22, chestYaw: -.54, stride: .05,
+      hand: [.57, 1.04, .23], elbow: [.45, 1.16, .16], racket: [.27, .43, .46] },
+    { ...ready, t: .43, hips: .84, hipYaw: -.42, chestYaw: -.83, stride: .15,
+      hand: [.66, .86, .24], elbow: [.48, 1.01, .16], racket: [.39, -.60, .22] },
+    { ...ready, t: .62, hips: .98, hipYaw: .18, chestYaw: .03, stride: .20,
+      hand: [.64, 1.14, -.48], elbow: [.42, 1.10, -.26], racket: [.23, .59, -.46] },
+    { ...ready, t: .81, hips: 1.02, hipYaw: .49, chestYaw: .70, stride: .22,
+      hand: [.04, 1.68, -.43], elbow: [.21, 1.38, -.38], racket: [-.37, .70, -.02] },
+    end,
+  ],
+  drop: [
+    ready,
+    { ...ready, t: .24, hipYaw: -.22, chestYaw: -.51, stride: .08,
+      hand: [.47, 1.27, .03], elbow: [.44, 1.18, -.03], racket: [.24, .54, .49] },
+    { ...ready, t: .43, hips: .87, chestYaw: -.51, stride: .13,
+      hand: [.60, 1.32, -.21], elbow: [.43, 1.20, -.09], racket: [.32, .32, -.20] },
+    { ...ready, t: .62, hips: .96, hipYaw: .16, chestYaw: -.04, stride: .21,
+      hand: [.57, 1.03, -.51], elbow: [.39, 1.09, -.22], racket: [.38, .19, -.61] },
+    { ...ready, t: .81, hips: .95, hipYaw: .37, chestYaw: .25, stride: .23,
+      hand: [.22, .94, -.65], elbow: [.37, 1.04, -.35], racket: [.26, .44, -.50] },
+    end,
+  ],
 }
 
 export type MuscleGroup = 'legs' | 'core' | 'arm'
@@ -78,7 +150,10 @@ export const MUSCLES = {
 } as const
 
 export const BODY_MASS = 75
-export const MOTION_DURATION: Record<Technique, number> = { forehand: 2.2, backhand: 2.25, serve: 2.4, footwork: 1.85 }
+export const MOTION_DURATION: Record<Technique, number> = {
+  forehand: 2.2, backhand: 2.25, serve: 2.4, footwork: 1.85, volley: 1.5, backhandVolley: 1.55,
+  halfVolley: 1.65, overhead: 2.15, lob: 2.0, drop: 1.85,
+}
 export const GRIP_TO_STRINGS = .362
 
 export const vec = (x = 0, y = 0, z = 0): Vec3 => ({ x, y, z })
@@ -163,7 +238,8 @@ export function samplePose(technique: Technique, progress: number, options: Moti
   const upcourt = options.depth ?? 0
   const lean = clamp(sideways, -1, 1) * .10
   const runCycle = Math.sin(options.run ?? 0) * Math.min(1, Math.hypot(sideways, upcourt))
-  const hop = technique === 'serve' ? .17 * pulse(t, .47, .75) : technique === 'footwork' ? .115 * pulse(t, .10, .34) : 0
+  const hop = technique === 'serve' ? .17 * pulse(t, .47, .75)
+    : technique === 'overhead' ? .098 * pulse(t, .49, .74) : technique === 'footwork' ? .115 * pulse(t, .10, .34) : 0
   const travel = technique === 'footwork' ? .44 * pulse(t, .44, 1) : 0
   const weightShift = technique === 'forehand' ? -.10 * pulse(t, .43, .95) + .05 * pulse(t, .16, .54)
     : technique === 'backhand' ? .09 * pulse(t, .43, .94) : travel

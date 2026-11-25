@@ -22,6 +22,14 @@ npm run preview
 
 Open the production site while online and wait for **Offline ready**. Reload while offline to practice from the cached application. To install it, use the download button when your browser offers one, or use the browser’s **Install** or **Add to Home Screen** command. The simulation, lessons, fonts, and diagrams are included in the cache. The Field Guide’s external reading links require a connection.
 
+## NTRP Skill Path
+
+Open **Skill Path** and choose any of the eight levels from **1.0 through 4.5**. Each level covers forehand, backhand, serve and return, volleys, special shots, and movement and match play. **Full level guide** contains all eight profiles and their skill breakdowns.
+
+Select a skill and exercise to see the feed’s intended contact position, landing zone, and any partner or recovery position on the court. Preview the shot, study its motion in Technique Lab, or choose **Practice drill** to load it into the playable court. There are 104 level-and-skill drill choices across 18 exercise types. Easier drills use slower feeds and wider timing windows. Advanced drills ask for changing depth and direction, tighter placement, faster returns, two-ball point patterns, and coordinated doubles positions. Progress is saved locally per drill and remains available offline.
+
+The 1.0 starting stage follows the USTA characteristics chart. The USTA’s current adult rating scale starts at 1.5. The practice records show drill completion in Baseline. [USTA characteristics](https://www.usta.com/content/dam/usta/sections/eastern/pdfs/NTRP%20Characteristics.pdf) · [USTA rating information](https://www.usta.com/en/home/play/adult-tennis/programs/national/about-ntrp-ratings.html)
+
 ## Practice
 
 | Drill | Goal |
@@ -37,7 +45,7 @@ Open the production site while online and wait for **Offline ready**. Reload whi
 - Press **C** to cycle cameras, or select baseline, player, sideline, overhead, net, ball chase, or free orbit from the camera menu. Drag around the scene in free orbit and use the distance slider or wheel to zoom. The arrow keys also orbit while practice is paused. Hide the interface and enter fullscreen independently.
 - Press **T** or select **Replay** after a shot. Scrub from preparation through contact and landing, play the clip at reduced speed, or jump directly to a racket, net, or court impact. The replay preserves the original surface and wind. Drill bests and preferences are stored locally.
 
-**Technique Lab** shows the forehand, two-handed backhand, serve, and split-step in five stages each. Scrub through the stroke or use slow motion. Fixed-length arm and leg segments follow a joint-constrained pose path. Select the leg, trunk, or racket-arm marker to see the relevant muscle groups. The 3D overlays show foot load, center of mass, knee and elbow flexion, hip–shoulder separation, and the racket head path. Switch between front, rear, profile, three-quarter, court-level, or free-orbit views.
+**Technique Lab** shows the forehand, two-handed backhand, serve, split-step, forehand and backhand volleys, half-volley, overhead, topspin lob, and drop shot in five stages each. Scrub through the stroke or use slow motion. Fixed-length arm and leg segments follow a joint-constrained pose path. Select the leg, trunk, or racket-arm marker to see the relevant muscle groups. The 3D overlays show foot load, center of mass, knee and elbow flexion, hip–shoulder separation, and the racket head path. Switch between front, rear, profile, three-quarter, court-level, or free-orbit views.
 
 **Force Analysis** shows the same gravity, air drag, and Magnus forces used by the flight solver. The impact channel calculates impulse from the ball’s change in momentum. Average force divides that impulse by the modeled contact duration. Energy change refers to translational kinetic energy. The body view estimates ground reaction from the acceleration of a pose-defined center of mass for a 75 kg reference athlete. Muscle highlights illustrate functional roles through the stroke. The body model and contact durations are illustrative.
 

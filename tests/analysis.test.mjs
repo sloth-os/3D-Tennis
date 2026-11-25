@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { Game } from '../src/game.ts'
-import { analyzeMotion, magnitude, samplePose, subtract } from '../src/motion.ts'
+import { MOTION_DURATION, analyzeMotion, magnitude, samplePose, subtract } from '../src/motion.ts'
 import { analyzeContact, BALL_MASS, flightForces, makeBall, STEP, stepBall } from '../src/physics.ts'
 import { replayBounds, sampleReplay } from '../src/replay.ts'
 
@@ -33,7 +33,7 @@ test('recorded court impact yields normal impulse, grip loss and translational e
 })
 
 test('all motion sequences preserve upper and lower limb lengths', () => {
-  for (const technique of ['forehand', 'backhand', 'serve', 'footwork']) {
+  for (const technique of Object.keys(MOTION_DURATION)) {
     for (let frame = 0; frame <= 20; frame += 1) {
       const pose = samplePose(technique, frame / 20)
       for (const arm of pose.arms) {

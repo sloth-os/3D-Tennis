@@ -12,8 +12,9 @@ import { replayBounds, sampleReplay, type ShotReplay } from './replay.ts'
 import { Game, type Sound } from './game.ts'
 import { FlightChart } from './chart.ts'
 import { analyzeContact, flightForces, STEP, type Ball, type Contact } from './physics.ts'
+import { SkillPath, planMotion } from './skill-path.ts'
 
-type Page = 'training' | 'technique' | 'guide'
+type Page = 'training' | 'ntrp' | 'technique' | 'guide'
 type Direction = 'left' | 'right' | 'up' | 'down'
 type Bests = Partial<Record<DrillId, number>>
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
@@ -24,7 +25,10 @@ const storageKey = 'baseline-lab-v1'
 const saved = readPreferences()
 byId('app').innerHTML = appMarkup()
 
-function readPreferences(): { surface?: Surface; wind?: Wind; trail?: boolean; guides?: boolean; audio?: boolean; best?: Bests } {
+function readPreferences(): {
+  surface?: Surface; wind?: Wind; trail?: boolean; guides?: boolean; audio?: boolean; best?: Bests;
+  ntrpLevel?: unknown; ntrpRecords?: unknown;
+} {
   try {
     return JSON.parse(localStorage.getItem(storageKey) ?? '{}') ?? {}
   } catch {
@@ -96,22 +100,44 @@ let currentLabPhase = -1
 let court: CourtView | undefined
 let loadingCourt = false
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
+const skillPath = new SkillPath(saved.ntrpLevel, saved.ntrpRecords, {
+  dirty: () => { dirty = true },
+  save: savePreferences,
+  practice: plan => {
+    closeReplay()
+    game.selectPlan(plan)
+    closeDrawers()
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    location.hash = 'training'
+  },
+  study: technique => {
+    lab.technique = technique
+    setLabPhase(0)
+    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+    location.hash = 'technique'
+  },
+})
+
+const courtHost = (page: Exclude<Page, 'guide'>) =>
+  byId(page === 'training' ? 'training-canvas' : page === 'ntrp' ? 'ntrp-canvas' : 'lab-canvas')
 
 function attachCourt() {
   if (page === 'guide') return
   if (court) {
-    court.attach(byId(page === 'training' ? 'training-canvas' : 'lab-canvas'))
+    court.attach(courtHost(page))
     return
   }
   if (loadingCourt) return
   loadingCourt = true
   void import('./court-view.ts').then(({ CourtView }) => {
     if (page === 'guide') return
-    court = new CourtView(byId(page === 'training' ? 'training-canvas' : 'lab-canvas'), () => { dirty = true })
+    court = new CourtView(courtHost(page), () => { dirty = true })
     if (court.fallback) {
       byId('court-badge').querySelector('span')!.textContent = 'Tactical court'
+      byId('ntrp-court-badge').querySelector('span')!.textContent = 'Tactical court'
       byId<HTMLSelectElement>('camera').disabled = true
       byId<HTMLSelectElement>('lab-angle').disabled = true
+      byId<HTMLSelectElement>('ntrp-camera').disabled = true
     }
     wireCourtInput(court.canvas)
     dirty = true
@@ -125,7 +151,7 @@ function attachCourt() {
 function savePreferences() {
   try {
     localStorage.setItem(storageKey, JSON.stringify({ surface, wind, trail: display.trail, guides: display.guides,
-      audio: audioEnabled, best }))
+      audio: audioEnabled, best, ntrpLevel: skillPath.level, ntrpRecords: skillPath.records }))
   } catch {
     // Preferences are optional when storage is unavailable.
   }
@@ -156,7 +182,7 @@ function setText(id: string, value: string) {
 }
 
 function readTrainingView(playing: boolean): GameView {
-  const key = [game.drill, game.shot, game.aim.x, game.aim.z, game.adSide].join()
+  const key = [game.plan?.id, game.drill, game.shot, game.aim.x, game.aim.z, game.adSide].join()
   if (game.phase === 'idle' && (key !== previewKey || !preview)) {
     previewKey = key
     preview = game.previewBall
@@ -241,9 +267,11 @@ function updateBodyReadout() {
 function updateCameraControls() {
   byId<HTMLSelectElement>('camera').value = display.camera
   byId<HTMLSelectElement>('lab-angle').value = lab.angle
+  byId<HTMLSelectElement>('ntrp-camera').value = skillPath.camera
   for (const [panel, id, active, orbit] of [
     ['training-panel', 'court-orbit', display.camera === 'orbit', display.orbit],
     ['lab-panel', 'lab-orbit', lab.angle === 'orbit', lab.orbit],
+    ['ntrp-panel', 'ntrp-orbit', skillPath.camera === 'orbit', skillPath.orbit],
   ] as const) {
     byId(panel).dataset.orbit = String(active)
     byId(`${id}-controls`).hidden = !active
@@ -253,7 +281,7 @@ function updateCameraControls() {
 }
 
 function closeDrawers() {
-  for (const id of ['training-panel', 'lab-panel']) delete byId(id).dataset.drawer
+  for (const id of ['training-panel', 'lab-panel', 'ntrp-panel']) delete byId(id).dataset.drawer
   all('[data-drawer]').filter(element => element.tagName === 'BUTTON').forEach(button => button.setAttribute('aria-expanded', 'false'))
 }
 
@@ -324,36 +352,41 @@ function updateReplay() {
 
 function updateTraining() {
   const drill = DRILLS[game.drill]
-  const serve = game.drill === 'serve'
-  if (game.drill !== drillKey) {
-    drillKey = game.drill
-    all<HTMLButtonElement>('[data-drill]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.drill === game.drill)))
-    byId('drill-title').textContent = drill.title
-    byId('drill-description').textContent = drill.description
-    byId('score-label').textContent = drill.goalLabel
-    byId('compact-score-label').textContent = drill.goalLabel
-    byId('study-drill').title = drill.coach
-    byId('score-goal').textContent = `/ ${drill.goal}`
-    byId('score-segments').innerHTML = '<i aria-hidden="true"></i>'.repeat(drill.goal)
+  const serve = game.serving
+  const plan = game.plan
+  const id = plan?.id ?? game.drill
+  if (id !== drillKey) {
+    drillKey = id
+    all<HTMLButtonElement>('[data-drill]').forEach(button =>
+      button.setAttribute('aria-pressed', String(!plan && button.dataset.drill === game.drill)))
+    const goalLabel = plan ? { placement: 'Target hits', recovery: 'Recoveries', rally: 'Best rally streak', pattern: 'Patterns' }[plan.score] : drill.goalLabel
+    byId('practice-heading').textContent = plan ? `NTRP ${plan.level} · ${plan.paceLabel}` : 'Practice session'
+    byId('drill-title').textContent = plan?.title ?? drill.title
+    byId('drill-description').textContent = plan?.objective ?? drill.description
+    byId('score-label').textContent = goalLabel
+    byId('compact-score-label').textContent = goalLabel
+    byId('study-drill').title = plan?.cue ?? drill.coach
+    byId('return-ntrp').querySelector('span')!.textContent = plan ? 'Back to Skill Path' : 'NTRP Skill Path'
+    byId('score-goal').textContent = `/ ${game.goal}`
+    byId('score-segments').innerHTML = '<i aria-hidden="true"></i>'.repeat(game.goal)
     byId('serve-settings').hidden = !serve
   }
 
-  const configuration = [game.drill, game.shot, game.adSide, display.guides].join()
+  const configuration = [id, game.shot, game.adSide, display.guides].join()
   if (configuration !== settingsKey) {
     settingsKey = configuration
     all<HTMLButtonElement>('[data-shot]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.shot === game.shot)))
     all<HTMLButtonElement>('[data-serve]').forEach(button => button.setAttribute('aria-pressed', String((button.dataset.serve === 'ad') === game.adSide)))
-    byId('aim-hint').querySelector('span')!.textContent = display.guides && (serve || game.drill === 'forehand')
-      ? 'Aim at the highlighted zone'
-      : game.drill === 'footwork' ? 'Recover to the center ring' : 'Choose an aim point across the net'
+    byId('aim-hint').querySelector('span')!.textContent = display.guides && game.showTarget
+      ? 'Aim at the highlighted zone' : game.drill === 'footwork' ? 'Use the recovery ring' : 'Choose an aim point across the net'
   }
 
-  const bestSoFar = Math.max(0, Number(best[game.drill]) || 0)
-  if (game.progress > bestSoFar) {
+  if (!plan && game.progress > Math.max(0, Number(best[game.drill]) || 0)) {
     best[game.drill] = game.progress
     savePreferences()
   }
-  const score = [game.drill, game.progress, game.attempts, game.streak, best[game.drill]].join()
+  const currentBest = plan ? skillPath.record(plan, game.progress) : best[game.drill] ?? 0
+  const score = [id, game.progress, game.attempts, game.streak, currentBest].join()
   if (score !== scoreKey) {
     scoreKey = score
     byId('score-current').textContent = String(game.progress)
@@ -362,9 +395,9 @@ function updateTraining() {
     segments.setAttribute('aria-valuemax', String(game.goal))
     segments.setAttribute('aria-valuenow', String(game.progress))
     Array.from(segments.children).forEach((child, index) => (child as HTMLElement).dataset.hit = String(index < game.progress))
-    byId('attempts').textContent = game.drill === 'rally' && game.active
+    byId('attempts').textContent = (plan?.score === 'rally' || !plan && game.drill === 'rally') && game.active
       ? `${game.streak} in a row` : `${game.attempts} attempt${game.attempts === 1 ? '' : 's'}`
-    byId('best').textContent = `Best ${best[game.drill] ?? 0} / ${game.goal}`
+    byId('best').textContent = `Best ${currentBest} / ${game.goal}`
   }
 
   const action = !game.active
@@ -409,7 +442,9 @@ function updateTraining() {
     }
   }
   if (game.phase === 'incoming' && !game.paused) {
-    byId('timing-track').style.setProperty('--timing', `${clamp((game.contactError + .52) / 1.04, 0, 1) * 100}%`)
+    const track = byId('timing-track')
+    track.style.setProperty('--timing', `${clamp((game.contactError + .52) / 1.04, 0, 1) * 100}%`)
+    track.style.setProperty('--window-edge', `${50 - (game.plan ? game.plan.contactWindow - .035 : .125) / 1.04 * 100}%`)
   }
 }
 
@@ -471,20 +506,21 @@ function chartConditions() {
 
 function route() {
   const hash = location.hash.slice(1)
-  if (hash !== '' && hash !== 'training' && hash !== 'technique' && hash !== 'guide') return
-  const next: Page = hash === 'technique' || hash === 'guide' ? hash : 'training'
+  if (hash !== '' && hash !== 'training' && hash !== 'ntrp' && hash !== 'technique' && hash !== 'guide') return
+  const next: Page = hash || 'training'
   if (next !== page) {
     if (replay) closeReplay()
     closeDrawers()
     if (page === 'training' && game.active) game.paused = true
     if (page === 'technique') lab.playing = false
+    if (page === 'ntrp') skillPath.stopPreview()
     keys.clear()
     touches.clear()
     all('.court-panel.immersive').forEach(panel => panel.classList.remove('immersive'))
     page = next
     window.scrollTo(0, 0)
   }
-  for (const id of ['training', 'technique', 'guide'] as const) byId(`${id}-view`).hidden = id !== page
+  for (const id of ['training', 'ntrp', 'technique', 'guide'] as const) byId(`${id}-view`).hidden = id !== page
   all('[data-nav]').forEach(link => {
     if (link.dataset.nav === page) link.setAttribute('aria-current', 'page')
     else link.removeAttribute('aria-current')
@@ -493,6 +529,8 @@ function route() {
     updateLab()
   } else if (page === 'training') {
     updateTraining()
+  } else if (page === 'ntrp') {
+    skillPath.show()
   } else chartConditions()
   attachCourt()
   dirty = true
@@ -514,7 +552,7 @@ function toggleDrill() {
 }
 
 function selectDrill(drill: DrillId) {
-  if (game.drill === drill) return
+  if (!game.plan && game.drill === drill) return
   if (replay) closeReplay()
   game.select(drill)
   closeDrawers()
@@ -558,6 +596,7 @@ async function toggleFullscreen(id: string) {
 
 function openHelp() {
   if (game.active && page === 'training') game.paused = true
+  if (page === 'ntrp') skillPath.stopPreview()
   keys.clear()
   touches.clear()
   dirty = true
@@ -567,7 +606,7 @@ function openHelp() {
 byId('show-help').onclick = openHelp
 byId('start-drill').onclick = toggleDrill
 byId('study-drill').onclick = () => {
-  lab.technique = game.drill === 'rally' ? 'backhand' : game.drill
+  lab.technique = game.plan ? planMotion(game.plan) : game.drill === 'rally' ? 'backhand' : game.drill
   setLabPhase(0)
 }
 function resetDrill() { closeReplay(); game.reset(); updateTraining(); dirty = true }
@@ -608,6 +647,10 @@ byId<HTMLSelectElement>('camera').onchange = event => {
   display.camera = (event.currentTarget as HTMLSelectElement).value as CameraMode
   updateCameraControls()
 }
+byId<HTMLSelectElement>('ntrp-camera').onchange = event => {
+  skillPath.camera = (event.currentTarget as HTMLSelectElement).value as CameraMode
+  updateCameraControls()
+}
 for (const key of ['trail', 'guides'] as const) {
   const input = byId<HTMLInputElement>(`${key}-toggle`)
   input.checked = display[key]
@@ -642,8 +685,8 @@ all<HTMLButtonElement>('[data-move]').forEach(button => {
 })
 function wireCourtInput(canvas: HTMLCanvasElement) {
   let drag: { id: number; x: number; y: number } | null = null
-  const currentOrbit = () => page === 'technique' ? lab.orbit : display.orbit
-  const usingOrbit = () => page === 'technique' ? lab.angle === 'orbit' : display.camera === 'orbit'
+  const currentOrbit = () => page === 'technique' ? lab.orbit : page === 'ntrp' ? skillPath.orbit : display.orbit
+  const usingOrbit = () => (page === 'technique' ? lab.angle : page === 'ntrp' ? skillPath.camera : display.camera) === 'orbit'
   canvas.addEventListener('pointerdown', event => {
     if (event.button !== 0 || !usingOrbit() || court?.fallback) return
     canvas.setPointerCapture(event.pointerId)
@@ -692,7 +735,9 @@ all<HTMLButtonElement>('[data-hud]').forEach(button => button.onclick = () => {
   button.setAttribute('aria-label', label)
   button.title = label
 })
-for (const [id, settings, makeOrbit] of [['court-orbit', display, courtOrbit], ['lab-orbit', lab, athleteOrbit]] as const) {
+for (const [id, settings, makeOrbit] of [
+  ['court-orbit', display, courtOrbit], ['lab-orbit', lab, athleteOrbit], ['ntrp-orbit', skillPath, courtOrbit],
+] as const) {
   byId<HTMLInputElement>(`${id}-zoom`).oninput = event => {
     settings.orbit.zoom = Number((event.currentTarget as HTMLInputElement).value) / 100
     dirty = true
@@ -753,6 +798,10 @@ all('.world-labels').forEach(host => host.onclick = event => {
   if (page === 'technique' && Object.hasOwn(MUSCLES, marker)) {
     selectMuscle(marker as MuscleGroup)
     openDrawer('body', byId('lab-panel'))
+  } else if (page === 'ntrp') {
+    openDrawer('exercise', byId('ntrp-panel'))
+    byId('ntrp-skill-title').setAttribute('tabindex', '-1')
+    byId('ntrp-skill-title').focus({ preventScroll: true })
   } else if (page === 'training') {
     if (marker === 'target') {
       const center = zoneCenter(game.zone)
@@ -760,6 +809,9 @@ all('.world-labels').forEach(host => host.onclick = event => {
       byId('feedback').textContent = 'Aim set to the center of the target.'
       dirty = true
       focusCourt()
+    } else if (marker === 'partner' || marker === 'recovery' || marker === 'net-player') {
+      openDrawer('session', byId('training-panel'))
+      byId('feedback').textContent = game.plan?.cue ?? DRILLS[game.drill].coach
     } else {
       setForceMode(Object.hasOwn(MUSCLES, marker) ? 'body' : marker === 'impact' ? 'contact' : 'flight')
       openDrawer('forces', byId('training-panel'))
@@ -817,19 +869,21 @@ window.addEventListener('keydown', event => {
     })
     return
   }
-  if (page === 'guide' || help.open || event.ctrlKey || event.metaKey || event.altKey) return
+  if (page === 'guide' || help.open || byId<HTMLDialogElement>('ntrp-reference').open || event.ctrlKey || event.metaKey || event.altKey) return
   const target = event.target as HTMLElement | null
   if (target?.matches('input, select, textarea, [contenteditable="true"]')) return
   if (event.code === 'KeyC' && !event.repeat && court && !court.fallback) {
     const options = page === 'technique' ? Object.keys(LAB_CAMERAS) : Object.keys(COURT_CAMERAS)
-    const next = (options.indexOf(page === 'technique' ? lab.angle : display.camera) + 1) % options.length
+    const next = (options.indexOf(page === 'technique' ? lab.angle : page === 'ntrp' ? skillPath.camera : display.camera) + 1) % options.length
     if (page === 'technique') lab.angle = options[next] as LabAngle
+    else if (page === 'ntrp') skillPath.camera = options[next] as CameraMode
     else display.camera = options[next] as CameraMode
     updateCameraControls()
     event.preventDefault()
     return
   }
   const orbit = page === 'technique' && lab.angle === 'orbit' ? lab.orbit
+    : page === 'ntrp' && skillPath.camera === 'orbit' ? skillPath.orbit
     : page === 'training' && display.camera === 'orbit' && (!game.active || game.paused) ? display.orbit : null
   if (orbit && event.code.startsWith('Arrow')) {
     orbit.yaw += event.code === 'ArrowLeft' ? -.13 : event.code === 'ArrowRight' ? .13 : 0
@@ -871,7 +925,7 @@ window.addEventListener('keyup', event => keys.delete(event.code))
 window.addEventListener('blur', () => { keys.clear(); touches.clear() })
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && game.active) game.paused = true
-  if (document.hidden) { lab.playing = false; if (replay) replay.playing = false }
+  if (document.hidden) { lab.playing = false; skillPath.stopPreview(); if (replay) replay.playing = false }
   dirty = true
 })
 window.addEventListener('hashchange', route)
@@ -928,7 +982,8 @@ function stepAnimation(now: number) {
   const dt = clamp((now - previousFrame) / 1000, 0, .12)
   previousFrame = now
   const playing = page === 'training' && game.active && !game.paused
-  const wasPlaying = playing || (page === 'technique' && lab.playing) || !!replay?.playing
+  const pathPlaying = page === 'ntrp' && skillPath.animating
+  const wasPlaying = playing || (page === 'technique' && lab.playing) || pathPlaying || !!replay?.playing
   if (playing) {
     const touch = new Set(touches.values())
     const held = (direction: Direction) => Number(touch.has(direction) || movement[direction].some(key => keys.has(key)))
@@ -949,7 +1004,8 @@ function stepAnimation(now: number) {
     replay.time = Math.min(end, replay.time + dt * .42)
     if (replay.time >= end) replay.playing = false
   }
-  const animating = (playing && game.active) || (page === 'technique' && lab.playing) || !!replay?.playing
+  if (pathPlaying) skillPath.advance(dt, game.conditions)
+  const animating = (playing && game.active) || (page === 'technique' && lab.playing) || (pathPlaying && skillPath.animating) || !!replay?.playing
   const cameraMoving = !!court?.settling && !reducedMotion.matches
   const actionInterval = reducedMotion.matches ? 31 : 22
   if (page !== 'guide' && (dirty || (wasPlaying && !animating) || ((animating || cameraMoving) && now - lastRender >= actionInterval))) {
@@ -960,6 +1016,8 @@ function stepAnimation(now: number) {
       const body = court?.drawGame(game, view, elapsed)
       updateForceReadout(view, body)
       if (replay) updateReplay()
+    } else if (page === 'ntrp') {
+      court?.drawGame(skillPath.game, skillPath.view(game.conditions, reducedMotion.matches), elapsed)
     } else {
       updateLab()
       updateBodyReadout()
