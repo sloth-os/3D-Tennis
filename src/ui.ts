@@ -6,6 +6,8 @@ import { MUSCLES } from './motion.ts'
 import { ntrpMarkup, ntrpReferenceMarkup } from './ntrp-ui.ts'
 import { reportMarkup } from './session-review.ts'
 import { OPPONENTS } from './point-play.ts'
+import { CONTACT_BALLS } from './contact-training.ts'
+import { DEMO_PHASES } from './contact-demo.ts'
 
 const options = (labels: Record<string, string>) => Object.entries(labels).map(([key, value]) =>
   `<option value="${key}">${value}</option>`).join('')
@@ -25,12 +27,12 @@ const tools = (id: string, cameraLabel: string, values: Record<string, string>, 
     <button class="glass-button" type="button" data-fullscreen="${panel}" aria-label="Toggle fullscreen" title="Fullscreen">${icon('fullscreen', 17)}</button>
   </div>`
 const orbit = (id: string) => `<div class="orbit-controls" id="${id}-controls" hidden>
-  <span>Drag to orbit</span>
-  <label for="${id}-zoom"><span class="sr-only">Camera distance</span><input type="range" id="${id}-zoom" min="60" max="155" value="100"></label>
+  <span class="mouse-gesture">Drag to rotate · Right-drag to pan</span><span class="touch-gesture">Drag to rotate · Two fingers to pan or pinch</span>
+  <label for="${id}-zoom"><span class="sr-only">Camera distance</span><input type="range" id="${id}-zoom" min="30" max="250" value="100"></label>
   <button class="glass-button" type="button" id="${id}-reset" aria-label="Recenter camera" title="Recenter camera">${icon('reset', 15)}</button>
 </div>`
 
-const drillTitles = { forehand: 'Forehand', serve: 'Serve', footwork: 'Footwork', rally: 'Rally', match: 'Tiebreak' } as const
+const drillTitles = { forehand: 'Forehand', serve: 'Serve', footwork: 'Footwork', rally: 'Rally', match: 'Tiebreak', contact: 'Contact' } as const
 const drillCards = DRILL_ORDER.map(id => {
   const drill = DRILLS[id]
   return `<button class="drill-card theme-${drill.theme}" data-drill="${id}" type="button" aria-pressed="false" title="${drill.title}">
@@ -64,6 +66,16 @@ const training = `
         <div class="section-kicker">${icon('target', 16)} <span id="practice-heading">Practice session</span></div>
         <h1 id="drill-title">Forehand Fundamentals</h1>
         <p class="hud-copy" id="drill-description"></p>
+        <div class="contact-picker" id="contact-picker" hidden>
+          <label class="setting-label" for="contact-ball">Incoming ball<span class="select-shell"><select id="contact-ball">
+            ${Object.entries(CONTACT_BALLS).map(([key, spec]) => `<option value="${key}">${spec.label}</option>`).join('')}
+          </select>${icon('chevron', 14)}</span></label>
+          <div class="segmented" role="group" aria-label="Practice stroke side">
+            <button type="button" data-contact-side="forehand" aria-pressed="true">Forehand</button>
+            <button type="button" data-contact-side="backhand" aria-pressed="false">Backhand</button>
+          </div>
+          <button type="button" id="show-contact-study" class="report-action">${icon('play', 14)} View example</button>
+        </div>
         <div class="session-score" id="drill-score">
           <div class="score-heading"><span id="score-label">Target hits</span><span class="score-value"><strong id="score-current">0</strong><span id="score-goal"> / 5</span></span></div>
           <div class="progress-segments" id="score-segments" role="progressbar" aria-labelledby="score-label" aria-valuemin="0" aria-valuenow="0" aria-valuemax="5"></div>
@@ -106,6 +118,15 @@ const training = `
       </aside>
 
       <div class="court-readout" id="court-readout">
+        <div class="contact-study" id="contact-study" role="group" aria-label="Contact demonstration" hidden>
+          <div class="contact-study-head"><strong id="contact-study-title"></strong>
+            <button type="button" id="contact-change" title="Change the incoming ball">Change feed ${icon('chevron', 12)}</button></div>
+          <div class="contact-player"><button type="button" id="contact-play" class="glass-button" aria-label="Play example">${icon('play', 16)}</button>
+            <input type="range" id="contact-scrub" min="0" max="1000" value="0" aria-label="Contact demonstration timeline"><span>½×</span></div>
+          <div class="contact-phases" role="group" aria-label="Contact demonstration phases">${DEMO_PHASES.map((label, i) =>
+            `<button type="button" data-contact-phase="${i}">${label}</button>`).join('')}</div>
+          <p id="contact-study-cue"></p>
+        </div>
         <div class="court-hint" id="aim-hint">${icon('crosshair', 16)} <span>Aim at the highlighted zone</span></div>
         <div class="court-cue" id="court-cue" hidden>
           <div class="court-cue-text"><strong id="cue-title"></strong><span id="cue-detail"></span></div>
@@ -144,7 +165,7 @@ const training = `
         </div>
         <div class="input-hints" id="court-input-hint">
           <span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> Move</span><span><kbd>Space</kbd> Swing</span>
-          <span><kbd>Shift</kbd> Split</span><span>${icon('pointer', 14)} Aim with pointer</span><span><kbd>C</kbd> Camera</span>
+          <span><kbd>Shift</kbd> Split</span><span>${icon('pointer', 14)} Tap to aim · Drag to rotate</span><span><kbd>C</kbd> Camera</span>
         </div>
       </div>
       ${reportMarkup()}
@@ -305,9 +326,12 @@ export function appMarkup(): string {
           <div><dt>Start, pause or resume a drill</dt><dd><kbd>P</kbd></dd></div>
           <div><dt>Cycle camera angles</dt><dd><kbd>C</kbd></dd></div>
           <div><dt>Open the last shot replay</dt><dd><kbd>T</kbd></dd></div>
-          <div><dt>Look around in Free orbit</dt><dd>Drag or use arrow keys while paused</dd></div>
+          <div><dt>Rotate the 3D scene</dt><dd>Drag with the mouse or one finger in any view.</dd></div>
+          <div><dt>Pan and zoom</dt><dd>Right-drag or Alt-drag to pan. Scroll to zoom. On touch, slide two fingers or pinch.</dd></div>
+          <div><dt>Camera keys</dt><dd>In Free orbit, use arrows to rotate or Shift + arrows to pan while practice is paused. + and − zoom.</dd></div>
         </dl>
         <p>On a touchscreen, use the direction buttons, Split, and Swing. Tap the far court to aim.</p>
+        <p>In Contact Points, pick a feed and a stroke side. Scrub the example to see the feet, contact height and racket path, then choose Practice feed to play it.</p>
         <p>In a tiebreak, serve twice if needed and let the opponent’s serve bounce. Shoe marks show a receiving stance. The blue ring covers the next reply. Select the scoreboard to review a point or replay a shot.</p>
         <button class="primary-button close-help" type="submit">Back to court ${icon('right', 16)}</button>
       </form>

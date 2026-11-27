@@ -38,6 +38,15 @@ The 1.0 starting stage follows the USTA characteristics chart. The USTA’s curr
 | Serve Placement | Time the toss near its apex and put five serves in the target. Switch between deuce and ad courts. |
 | Footwork & Recovery | Split as the feeder hits, move to the ball, return it in bounds, and recover into the center ring. |
 | Rally Builder | Keep six consecutive shots in the singles court against the moving feeder. |
+| Contact Points | Read a specific feed, move into the hitting stance, land the shot, and reach the recovery ring three times. |
+
+## Contact Points
+
+Choose **Contact** on the court or open **#contact**. Pick a forehand or backhand, then select a waist-high drive, low skid, shoulder-high bounce, wide ball, short approach, deep ball, or ball at the body. The model uses a right-handed player. Forehands are on the player’s right and backhands are on the left. The backhand drive uses two hands. For a slice, the guide hand releases before contact and moves back for balance.
+
+Select **Split**, **Move**, **Contact**, or **Recover** to inspect that moment. Play the example at half speed or scrub it frame by frame. The blue shoes mark the hitting stance, the amber ground mark locates the bounce, and a vertical guide measures the hitting height. The orange curve follows the racket head. The example uses the selected surface, wind, and stroke type.
+
+Choose **Practice feed** to play the same incoming ball. Split on the feeder’s strike, move to the shoes, swing as the timing cue turns green, and reach the blue recovery ring. After a short approach the recovery ring moves forward to cover the pass. Open **Session review** to compare the actual contact height, side spacing, and distance in front of the stance.
 
 ## Singles tiebreak
 
@@ -54,7 +63,8 @@ Open **Session review** in a drill or the **scoreboard** in a match. Select a la
 - Move with **W A S D** or the arrow keys. Swing with **Space** when the contact indicator turns green. Use **Shift** to split-step and **P** to start or pause.
 - Click or tap the far court to aim. Use **Q / E** to adjust left and right or **R / F** to adjust depth.
 - On a touchscreen, use the direction, Swing, and Split buttons below the court. Start and pause from the same panel.
-- Press **C** to cycle cameras, or select baseline, player, sideline, overhead, net, ball chase, or free orbit from the camera menu. Drag around the scene in free orbit and use the distance slider or wheel to zoom. The arrow keys also orbit while practice is paused. Hide the interface and enter fullscreen independently.
+- Drag with the mouse or one finger to rotate from any 3D camera, including a paused replay. Right-drag or **Alt-drag** to pan and scroll to zoom. On a touchscreen, slide two fingers together to pan or spread them apart to zoom in. A single tap on the far court sets your aim, including in Free orbit.
+- Press **C** to cycle camera presets, including **Contact close-up**. In Free orbit use the distance slider or **+ / −** to zoom. While practice is paused, arrow keys rotate and **Shift + arrows** pan. Select **Recenter camera** to restore the default orbit or choose a preset to resume its framing.
 - Press **T** or select **Replay** after a shot. Scrub from preparation through contact and landing, play the clip at reduced speed, or jump directly to a racket, net, or court impact. The replay preserves the original surface and wind. Drill bests and preferences are stored locally.
 
 **Technique Lab** shows the forehand, two-handed backhand, serve, split-step, forehand and backhand volleys, half-volley, overhead, topspin lob, and drop shot in five stages each. Scrub through the stroke or use slow motion. Fixed-length arm and leg segments follow a joint-constrained pose path. Select the leg, trunk, or racket-arm marker to see the relevant muscle groups. The 3D overlays show foot load, center of mass, knee and elbow flexion, hip–shoulder separation, and the racket head path. Switch between front, rear, profile, three-quarter, court-level, or free-orbit views.

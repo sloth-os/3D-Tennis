@@ -1,7 +1,7 @@
-import { clamp, type Aim, type Technique } from './config.ts'
+import { clamp, type Aim, type Shot, type Technique, type Vec3 } from './config.ts'
 import { makeBall, type Ball, type Conditions, type Contact } from './physics.ts'
 
-export type StrokePose = { technique: Technique; progress: number }
+export type StrokePose = { technique: Technique; progress: number; strike?: Vec3; shot?: Shot }
 export type FootMotion = { velocity: Aim; stride: number; split: number }
 export type RivalFrame = { position: Aim; pose: StrokePose; feet: FootMotion }
 export type ReplayFrame = { time: number; ball: Ball; player: Aim; pose: StrokePose; conditions: Conditions;
@@ -40,7 +40,7 @@ export function sampleReplay(replay: ShotReplay, time: number): ReplayFrame {
   const fraction = (time - a.time) / (b.time - a.time)
   const mix = (x: number, y: number) => x + (y - x) * fraction
   const blendAim = (a: Aim, b: Aim) => ({ x: mix(a.x, b.x), z: mix(a.z, b.z) })
-  const blendPose = (a: StrokePose, b: StrokePose) => ({ technique: a.technique,
+  const blendPose = (a: StrokePose, b: StrokePose) => ({ ...a,
     progress: a.technique === b.technique ? mix(a.progress, b.progress) : a.progress })
   const blendFeet = (a: FootMotion, b: FootMotion) => ({ velocity: blendAim(a.velocity, b.velocity),
     stride: mix(a.stride, b.stride), split: mix(a.split, b.split) })

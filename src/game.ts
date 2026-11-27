@@ -6,6 +6,8 @@ import { contactAt, launchTo, makeBall, shotBall, speedOf, stepBall, traceBall, 
 import { snapshot, type ReplayFrame, type ShotReplay, type StrokePose } from './replay.ts'
 import { aimWidth, practiceFeed, practiceFeeder, practiceSign, practiceTarget, recoveryRadius, type NtrpPlan, type Take } from './ntrp-training.ts'
 import { advanceFeet, callLanding, interceptFlight, lineDistance, recoveryPosition, Tiebreak, type LineCall, type Pace, type Side } from './point-play.ts'
+import { CONTACT_BALLS, CONTACT_START, contactAtDepth, contactFeed, contactRecovery, liveSwingTip, moveToStance,
+  type ContactBall, type StrokeSide } from './contact-training.ts'
 
 export type Phase = 'idle' | 'countdown' | 'incoming' | 'outgoing' | 'opponent' | 'recover' | 'between' | 'finished'
 export type Motion = { x: number; z: number }
@@ -39,6 +41,10 @@ export class Game {
   plan: NtrpPlan | null = null
   match: Tiebreak | null = null
   pace: Pace = 'club'
+  contactBall: ContactBall = 'waist'
+  contactSide: StrokeSide = 'forehand'
+  private strike?: Vec3
+  private swingShot: Shot = 'topspin'
   shot: Shot = 'topspin'
   conditions: Conditions = { surface: 'hard', wind: 0 }
   adSide = false
@@ -96,6 +102,7 @@ export class Game {
     return this.plan ? practiceTarget(this.plan, this.adSide, this.attempts, this.streak % 2 === 1) : targetFor(this.drill, this.adSide)
   }
   get recoverySpot() {
+    if (this.drill === 'contact') return contactRecovery(this.contactBall, this.contactSide)
     if (this.match) return recoveryPosition(this.intercept?.ball ?? this.opponent)
     return this.plan?.recover ?? { x: 0, z: HOME }
   }
@@ -141,6 +148,12 @@ export class Game {
     this.shot = DRILLS[drill].shot
     this.adSide = false
     this.reset()
+  }
+
+  selectContact(ball: ContactBall, side: StrokeSide) {
+    this.contactBall = ball
+    this.contactSide = side
+    this.select('contact')
   }
 
   selectPlan(plan: NtrpPlan): void {
@@ -191,6 +204,7 @@ export class Game {
     this.player = { x: serving ? (this.adSide ? -1.7 : 1.7) : this.drill === 'forehand' ? 0.45 : 0,
       z: serving ? SERVE_HOME : HOME }
     if (this.plan && !serving) this.player = { ...this.plan.home }
+    if (this.drill === 'contact') this.player = { ...CONTACT_START }
     this.opponent = this.plan ? practiceFeeder(this.plan) : { x: -1.4, z: -10.6 }
     if (this.match) {
       const sign = this.adSide ? -1 : 1
@@ -204,6 +218,7 @@ export class Game {
     this.touchedTape = false
     this.serveFootFault = false
     this.missedSwing = ''
+    this.strike = undefined
     this.opponentTechnique = 'forehand'
     this.technique = this.swingTechnique()
     this.swingClock = 1
@@ -229,7 +244,7 @@ export class Game {
   setConditions(conditions: Conditions): void {
     this.conditions = conditions
     if (this.ball && (this.phase === 'incoming' || this.phase === 'outgoing' || this.phase === 'opponent')) {
-      const flight = traceBall(this.ball, this.courtConditions, 2.65)
+      const flight = traceBall(this.ball, this.courtConditions, this.drill === 'contact' ? 3.6 : 2.65)
       this.forecast = flight.points
       if (this.phase !== 'incoming') this.trackOpponent(flight.points)
       else this.markReceive(flight)
@@ -255,6 +270,12 @@ export class Game {
   private canReach(): boolean {
     if (!this.ball) return false
     const { position } = this.ball
+    if (this.drill === 'contact' && this.receiveMark) {
+      const sign = this.contactSide === 'forehand' ? 1 : -1
+      const space = (position.x - this.player.x) * sign
+      return space >= .27 && space <= 1.04 && Math.abs(position.z - this.receiveMark.contact.z) < .72
+        && Math.abs(position.y - this.receiveMark.contact.y) < .31
+    }
     if (this.serving) return Math.abs(position.x - this.player.x - .32) < .62 && Math.abs(position.z - this.player.z + .45) < .60 && position.y > 2.1
     if (this.take === 'overhead') return Math.abs(position.x - this.player.x) < 1.45 && position.y >= 1.90 && position.y <= 3.18
     if (this.take === 'rising' && (position.y > .87 || this.ball.velocity.y <= 0)) return false
@@ -266,9 +287,20 @@ export class Game {
   }
 
   private markReceive(flight: ReturnType<typeof traceBall>) {
-    const bounce = this.ball && this.ball.bounces > 0 ? this.receiveMark?.bounce ?? null : flight.landing
+    const previous = this.receiveMark
+    const bounce = this.ball && this.ball.bounces > 0 ? previous?.bounce ?? null : flight.landing
     this.receiveMark = null
     if (this.serving) return
+    if (this.drill === 'contact') {
+      const contact = contactAtDepth(flight.points, CONTACT_BALLS[this.contactBall].z)
+      if (contact) {
+        const forehand = this.contactSide === 'forehand'
+        this.receiveMark = { feet: { x: contact.x + (forehand ? -.62 : .62), z: contact.z + .65 },
+          contact, bounce, side: forehand ? 'Forehand' : 'Backhand' }
+        return
+      }
+      if (previous && this.ball && this.ball.position.z >= previous.contact.z) { this.receiveMark = previous; return }
+    }
     const take = this.plan?.take ?? (this.match && this.player.z <= COURT.service && !this.match.serviceBall ? 'beforeBounce' : 'afterBounce')
     const bounced = take === 'afterBounce' || take === 'rising'
     const depth = this.plan?.home.z ?? this.player.z
@@ -298,6 +330,7 @@ export class Game {
   }
 
   private swingTechnique(): Technique {
+    if (this.drill === 'contact') return this.contactSide
     const backhand = this.ball ? this.ball.position.x < this.player.x : this.plan?.direction === 'backhand'
     switch (this.take) {
       case 'toss': return 'serve'
@@ -311,13 +344,16 @@ export class Game {
   }
 
   get posture(): StrokePose {
-    if (this.swingClock < .50) return { technique: this.technique, progress: clamp(.62 + this.swingClock * .76, .62, 1) }
+    if (this.swingClock < .50) return { technique: this.technique, progress: clamp(.62 + this.swingClock * .76, .62, 1), strike: this.strike, shot: this.swingShot }
     const serve = this.serving
     const technique = this.swingTechnique()
     const progress = this.phase === 'incoming'
       ? serve ? clamp(this.phaseTime * .56 / SERVE_CONTACT, 0, .56) : clamp((this.contactError + .66) * .79, .02, .55)
       : serve ? 0 : .025
-    return { technique, progress }
+    const mark = this.phase === 'incoming' ? this.receiveMark : null
+    const strike = mark && (technique === 'forehand' || technique === 'backhand')
+      ? { x: mark.contact.x - mark.feet.x, y: mark.contact.y - .014, z: mark.contact.z - mark.feet.z } : undefined
+    return { technique, progress, strike, shot: this.shot }
   }
 
   get previewBall(): Ball {
@@ -336,6 +372,7 @@ export class Game {
   cue(): Cue {
     if (this.paused) return { title: this.match ? 'Tiebreak paused' : 'Drill paused', detail: 'Resume when you’re ready.', tone: 'neutral' }
     if (this.phase === 'countdown') {
+      if (this.drill === 'contact') return { title: CONTACT_BALLS[this.contactBall].label, detail: CONTACT_BALLS[this.contactBall].move, tone: 'neutral' }
       if (this.match) return { title: this.serving ? 'Your serve' : 'Return of serve',
         detail: (this.match.played > 0 && this.match.played % 6 === 0 ? 'Change of ends · ' : '') + (this.match.ad ? 'Ad court' : 'Deuce court')
           + ' · ' + (this.serving ? 'Aim into the diagonal box, then time the toss.' : 'Split on the strike and let the serve bounce.'), tone: 'neutral' }
@@ -346,26 +383,42 @@ export class Game {
     }
     if (this.phase === 'incoming') {
       const error = this.contactError
+      const mark = this.receiveMark
+      const side = mark?.side ?? (this.ball && this.ball.position.x < this.player.x ? 'Backhand' : 'Forehand')
+      const move = mark ? moveToStance(this.player, mark.feet) : ''
+      const volley = this.take === 'beforeBounce' && !(this.match && this.player.z > COURT.service)
+      const overhead = this.take === 'overhead' && (!this.match || this.player.z < COURT.service)
       if (this.missedSwing && this.swingClock < .26) return { title: this.missedSwing, detail: 'The ball is live. Recover for another swing.', tone: 'warn' }
-      if (this.contactOpen()) return { title: 'Swing now', detail: 'Press Space or tap Swing.', tone: 'good' }
-      if (this.serving) return { title: 'Follow the toss', detail: 'Swing as it reaches the top of the window.', tone: 'neutral' }
-      if (this.take === 'beforeBounce') return this.match
-        ? { title: 'Read the flight', detail: 'Take the ball early if you can reach it, or let it bounce.', tone: 'neutral' }
-        : { title: 'Read the volley', detail: 'Move to the feed and swing before it bounces.', tone: 'neutral' }
-      if (this.take === 'overhead') return { title: 'Track the lob', detail: 'Get behind the ball and reach as it drops into range.', tone: 'neutral' }
-      if (this.take === 'rising') return { title: 'Catch the rise', detail: 'Meet the ball just after the bounce.', tone: 'neutral' }
-      if (this.ball && this.ball.bounces > 0 && Math.abs(error) < 0.28 && !this.canReach()) {
-        const dx = (this.receiveMark?.feet.x ?? this.player.x) - this.player.x
-        return { title: 'Move to the ball', detail: Math.abs(dx) > .45
-          ? 'Move ' + Math.abs(dx).toFixed(1) + ' m ' + (dx < 0 ? 'left' : 'right') + ' toward the shoe marks.'
-          : 'Leave room for the racket beside your body.', tone: 'warn' }
+      if (this.contactOpen()) {
+        const technique = this.swingTechnique()
+        const detail = technique === 'serve' || technique === 'overhead' ? 'Reach up to the ball just in front of your hitting shoulder.'
+          : technique === 'halfVolley' ? 'Stay low and block forward just after the bounce.'
+          : technique === 'volley' || technique === 'backhandVolley' ? 'Meet it out in front with a short punch and a steady wrist.'
+          : technique === 'lob' ? 'Brush up the back of the ball and finish high over the net player.'
+          : technique === 'drop' ? 'Soften the grip and cushion the ball with a slightly open face.'
+          : liveSwingTip(this.ball!.position.y, technique, this.shot)
+        return { title: 'Swing now', detail, tone: 'good' }
+      }
+      if (this.serving) return { title: 'Follow the toss', detail: 'Extend up to contact slightly ahead of the hitting shoulder.', tone: 'neutral' }
+      if (overhead) return { title: 'Track the lob', detail: 'Turn sideways and use crossover steps to get behind the ball. Reach high in front.', tone: 'neutral' }
+      if (this.take === 'rising') return { title: move ? 'Move ' + move : 'Catch the rise', detail: 'Bend the knees, set the face low and block just after the bounce.', tone: 'neutral' }
+      if (volley) return { title: move ? 'Move ' + move : 'Set for the volley', detail: 'Split, step diagonally to the ball and meet it in front with a short punch.', tone: 'neutral' }
+      if (this.match?.serviceBall && !this.ball?.bounces) return { title: 'Let the serve bounce', detail: move
+        ? 'Move ' + move + ' to the blue shoes and turn for the ' + side.toLowerCase() + '.' : 'Split and turn. Keep the racket in front for the return.', tone: 'neutral' }
+      if (mark) {
+        return { title: move ? 'Move ' + move : 'Set for the ' + side.toLowerCase(),
+          detail: (move ? 'Find the blue shoes. ' : '') + liveSwingTip(mark.contact.y, side, this.shot),
+          tone: Math.abs(error) < .18 && !!move ? 'warn' : 'neutral' }
       }
       return { title: 'Read the bounce', detail: 'Move into position and wait for the contact window.', tone: 'neutral' }
     }
     if (this.match && (this.phase === 'outgoing' || this.phase === 'opponent'))
       return { title: this.touchedTape ? 'Net cord' : 'Cover the reply', detail: 'Recover toward the blue ring. Split as your opponent strikes.', tone: 'neutral' }
+    if (this.phase === 'outgoing' && this.drill === 'contact') return { title: 'Recover for the reply',
+      detail: CONTACT_BALLS[this.contactBall].recover, tone: 'neutral' }
     if (this.phase === 'outgoing') return { title: 'Track your shot', detail: 'Watch where it crosses the net and lands.', tone: 'neutral' }
     if (this.phase === 'opponent') return { title: 'Stay in the rally', detail: 'Reset your feet as the feeder moves.', tone: 'good' }
+    if (this.phase === 'recover' && this.drill === 'contact') return { title: 'Move into the recovery ring', detail: CONTACT_BALLS[this.contactBall].recover, tone: 'warn' }
     if (this.phase === 'recover') return { title: this.plan ? 'Reach the recovery ring' : 'Recover to center', detail: 'Move into the ring before the next feed.', tone: 'warn' }
     return this.result
   }
@@ -408,7 +461,8 @@ export class Game {
       return
     }
     if (!this.canReach()) {
-      const detail = this.plan?.direction === 'backhand' ? 'Keep the bounce on your backhand side and leave space to swing.'
+      const detail = this.drill === 'contact' ? CONTACT_BALLS[this.contactBall].move
+        : this.plan?.direction === 'backhand' ? 'Keep the bounce on your backhand side and leave space to swing.'
         : 'Move your feet and leave a racket’s length beside you.'
       this.finishAttempt(false, 'Out of reach', detail)
       return
@@ -421,13 +475,15 @@ export class Game {
       z: this.aim.z - (1 - quality) * 1.5 * assisted,
     }
     const incoming = this.ball
+    this.swingShot = this.shot
+    this.strike = { x: incoming.position.x - this.player.x, y: incoming.position.y - .014, z: incoming.position.z - this.player.z }
     this.ball = this.launch(incoming.position, aim, quality)
     this.ball.rotation = { ...incoming.rotation }
     if (this.match) this.match.strikes++
     this.touchedTape = false
     this.lastContact = contactAt('racket', this.ball.position, incoming.velocity, this.ball.velocity, this.conditions.surface)
     this.replay = {
-      frames: [...this.preparation, this.recordFrame()],
+      frames: [...this.preparation, this.captureFrame()],
       events: [{ time: this.clock, contact: this.lastContact }],
       score: this.match ? { you: this.match.you, rival: this.match.rival } : undefined,
     }
@@ -452,7 +508,7 @@ export class Game {
     this.enter('outgoing')
   }
 
-  private recordFrame(): ReplayFrame {
+  captureFrame(): ReplayFrame {
     return snapshot(this.clock, this.ball!, this.player, this.posture, this.courtConditions,
       { velocity: this.playerMotion, stride: this.playerStride, split: this.splitClock },
       { position: this.opponent, pose: this.opponentPose,
@@ -505,10 +561,10 @@ export class Game {
     if (this.ball) {
       const impact = stepBall(this.ball, dt, this.courtConditions)
       if (this.phase === 'incoming') {
-        this.preparation.push(this.recordFrame())
+        this.preparation.push(this.captureFrame())
         if (this.preparation.length > 46) this.preparation.shift()
       } else if (this.replay && this.clock <= this.recordUntil) {
-        this.replay.frames.push(this.recordFrame())
+        this.replay.frames.push(this.captureFrame())
       }
       if (this.ball.bounces < 3) {
         this.trail.push({ ...this.ball.position })
@@ -553,14 +609,14 @@ export class Game {
         }
       }
       const late = this.plan ? this.plan.contactWindow + .14 : .30
-      const contactTimeout = this.take === 'overhead' ? 3.7 : 3.3
+      const contactTimeout = this.take === 'overhead' || this.drill === 'contact' ? 4.0 : 3.3
       if (this.phase === 'incoming' && this.match && this.serving && this.ball.bounces === 1) {
         this.result = { title: 'Toss reset', detail: 'An untouched toss can be taken again. Swing near the top of the next toss.', tone: 'neutral' }
         this.enter('between')
         return
       }
       if (this.phase === 'incoming' && ((!this.match && this.contactError > late) || this.ball.bounces >= 2 || this.phaseTime > contactTimeout)) {
-        this.finishAttempt(false, 'Missed contact', 'Use the green timing window to meet the next ball.')
+        this.finishAttempt(false, 'Missed contact', this.drill === 'contact' ? CONTACT_BALLS[this.contactBall].move : 'Use the green timing window to meet the next ball.')
         return
       }
       if (this.phase === 'incoming' && !this.announcedContact && this.contactOpen()) {
@@ -587,13 +643,13 @@ export class Game {
 
     if (this.phase === 'recover') {
       const spot = this.recoverySpot
-      const inside = this.plan
+      const inside = this.plan || this.drill === 'contact'
         ? Math.hypot(this.player.x - spot.x, this.player.z - spot.z) <= this.recoverySize
         : Math.abs(this.player.x) < .78 && Math.abs(this.player.z - HOME) < .95
       if (inside) {
-        this.finishAttempt(true, this.plan ? 'Recovery complete' : 'Recovered to center',
+        this.finishAttempt(true, this.drill === 'contact' ? 'Contact and recovery' : this.plan ? 'Recovery complete' : 'Recovered to center',
           this.splitTimed ? 'Well-timed split and a quick recovery.' : 'Good recovery. Try a split-step on the next feed.')
-      } else if (this.phaseTime > (this.plan ? 2.20 : 1.75)) {
+      } else if (this.phaseTime > (this.plan || this.drill === 'contact' ? 2.20 : 1.75)) {
         this.finishAttempt(false, 'Recovery missed', 'Move toward the highlighted recovery ring right after the swing.')
       }
     } else if (this.phase === 'between' && this.phaseTime > 1.72) {
@@ -606,7 +662,8 @@ export class Game {
         if (this.match) {
           this.placePlayers()
           this.aim = this.serving ? { x: (this.adSide ? 1 : -1) * 2.12, z: -4.85 } : { x: this.adSide ? 2.0 : -2.0, z: -8.85 }
-        } else this.resetPracticeAim()
+        } else if (this.drill === 'contact') this.placePlayers()
+        else this.resetPracticeAim()
         this.enter('countdown')
       }
     }
@@ -643,6 +700,9 @@ export class Game {
         ? this.match.opponentReturn(returnFrom, player, Math.hypot(this.opponentMotion.x, this.opponentMotion.z), wind)
         : this.match.opponentServe(wind)
       this.match.strikes++
+    } else if (drill === 'contact') {
+      this.ball = contactFeed(this.contactBall, this.contactSide, this.courtConditions)
+      this.opponent = { x: this.ball.position.x + .42, z: this.ball.position.z - .38 }
     } else if (this.plan) {
       this.ball = practiceFeed(this.plan, this.attempts, this.opponent, wind, returnFrom)
       if (!returnFrom) this.opponent = { x: this.ball.position.x - .42, z: this.ball.position.z - .35 }
@@ -673,7 +733,7 @@ export class Game {
     this.preparation = []
     this.recordUntil = 0
     this.announcedContact = false
-    const flight = traceBall(this.ball, this.courtConditions, this.plan?.take === 'overhead' ? 3 : 2.58)
+    const flight = traceBall(this.ball, this.courtConditions, drill === 'contact' ? 3.6 : this.plan?.take === 'overhead' ? 3 : 2.58)
     this.forecast = flight.points
     this.enter('incoming')
     this.markReceive(flight)
@@ -701,6 +761,8 @@ export class Game {
         this.aim = { x: this.adSide ? -2.35 : 2.35, z: -9.1 }
       }
       this.enter('opponent')
+    } else if (this.drill === 'contact') {
+      this.enter('recover')
     } else if (this.plan) {
       this.scorePractice(position)
     } else if (serve || this.drill === 'forehand') {

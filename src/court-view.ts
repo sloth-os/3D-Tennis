@@ -4,17 +4,19 @@ import { COURT, SHOTS, SURFACES, clamp, type Aim, type Technique, type Vec3 } fr
 import { Game } from './game.ts'
 import { analyzeContact, flightForces, shotBall, traceBall, type Ball, type Contact, type Conditions } from './physics.ts'
 import { buildVenue, canvasTexture, floor } from './venue.ts'
-import type { CameraMode, LabAngle, Orbit } from './cameras.ts'
+import { orbitFromView, type CameraMode, type LabAngle, type Orbit } from './cameras.ts'
 import { activeMuscle, add, analyzeMotion, mix, samplePose, vec, MOTION_DURATION, type MuscleGroup } from './motion.ts'
 import type { ReplayFrame } from './replay.ts'
 import { WorldAnalysis, type BodyState, type WorldLabel } from './world-analysis.ts'
 import type { ForceMode } from './analysis-colors.ts'
 import { lineDistance } from './point-play.ts'
+import { CONTACT_START, contactHeight } from './contact-training.ts'
+import type { ContactDemo } from './contact-demo.ts'
 
 export type GameView = { camera: CameraMode; orbit: Orbit; trail: boolean; guides: boolean; vectors: boolean; mode: ForceMode;
   preview?: Ball; replay?: ReplayFrame; reviewTrail?: Vec3[]; contact: Contact | null; playing: boolean; leanMotion: boolean;
   demo?: { ball: Ball; time: number; trail: Vec3[] }; replayScore?: { you: number; rival: number };
-  netMotion?: { contact: Contact; age: number } | null }
+  netMotion?: { contact: Contact; age: number } | null; lesson?: ContactDemo }
 export type LabView = { technique: Technique; time: number; joints: boolean; anatomy: boolean; vectors: boolean;
   focus: MuscleGroup; angle: LabAngle; orbit: Orbit; playing: boolean; leanMotion: boolean; conditions: Conditions }
 
@@ -141,6 +143,7 @@ class LiveCourt {
   private readonly bounceGuide = mark(0xffc58c, .20, .86)
   private readonly feetGuide = new THREE.Group()
   private readonly contactGate = new THREE.Mesh(new THREE.RingGeometry(.147, .159, 32), guideMaterial(0xe7f7c4, .77))
+  private readonly heightLine = buildTrail(true)
   private readonly target = buildTarget()
   private readonly trail = buildTrail(false)
   private readonly projected = buildTrail(true)
@@ -186,6 +189,8 @@ class LiveCourt {
     }
     this.feetGuide.add(ring(.47, .014, guideMaterial(0x9be2ef, .48)))
     this.scene.add(this.bounceGuide, this.feetGuide, this.contactGate)
+    this.heightLine.material = new THREE.LineDashedMaterial({ color: 0xffcf8b, transparent: true, opacity: .88, dashSize: .055, gapSize: .045 })
+    this.scene.add(this.heightLine)
     this.lanes.material = new THREE.LineDashedMaterial({ color: 0x9ce3f0, transparent: true, opacity: .56, dashSize: .22, gapSize: .20 })
     this.lanes.visible = false
     this.scene.add(this.lanes)
@@ -248,7 +253,9 @@ class LiveCourt {
 
   attachLabels(host: HTMLElement) { this.world.attach(host) }
 
-  private placeCamera(key: CameraMode | `lab-${LabAngle}`, orbit: Orbit, dt: number, snap: boolean, player?: Aim, ball?: Ball, highReach = false) {
+  captureOrbit() { return orbitFromView(this.camera.position, this.focus, this.camera.fov) }
+
+  private placeCamera(key: CameraMode | `lab-${LabAngle}`, orbit: Orbit, dt: number, snap: boolean, player?: Aim, ball?: Ball, highReach = false, strokeSide = 1) {
     const narrow = this.aspect < 1.25
     const subject = this.demonstrator.root.position
     this.camera.up.set(0, 1, 0)
@@ -271,6 +278,14 @@ class LiveCourt {
         this.viewLook.set((player?.x ?? 0) * .20, 1.30, -6.6)
         fov = narrow ? 77 : 64
         break
+      case 'contact': {
+        const x = player?.x ?? 0, z = player?.z ?? 10.95
+        const shortPhone = this.height < 520 && this.aspect < .9
+        this.viewLook.set(x + strokeSide * .20, shortPhone ? -.62 : narrow ? .20 : .43, z - .42)
+        this.viewFrom.set(x + strokeSide * (shortPhone ? 4.12 : 3.65), 2.13, z + (shortPhone ? 5.0 : 4.38))
+        fov = narrow ? 54 : 39
+        break
+      }
       case 'overhead':
         this.viewFrom.set(0, narrow ? 41 : 43, .001)
         this.viewLook.set(0, 0, 0)
@@ -298,11 +313,14 @@ class LiveCourt {
         }
         fov = narrow ? 73 : 65
         break
-      case 'orbit': {
-        const distance = (narrow ? 27 : 24) * orbit.zoom
-        this.viewFrom.set(Math.sin(orbit.yaw) * Math.cos(orbit.elevation) * distance,
-          .65 + Math.sin(orbit.elevation) * distance, Math.cos(orbit.yaw) * Math.cos(orbit.elevation) * distance - 1.25)
-        fov = narrow ? 56 : 46
+      case 'orbit':
+      case 'lab-orbit': {
+        const distance = orbit.radius * orbit.zoom
+        this.viewLook.copy(orbit.target)
+        this.viewFrom.set(Math.sin(orbit.yaw) * Math.cos(orbit.elevation), Math.sin(orbit.elevation),
+          Math.cos(orbit.yaw) * Math.cos(orbit.elevation)).multiplyScalar(distance).add(this.viewLook)
+        this.viewFrom.y = Math.max(.18, this.viewFrom.y)
+        fov = orbit.fov
         break
       }
       default:
@@ -313,17 +331,12 @@ class LiveCourt {
         if (key === 'lab-side') this.viewFrom.set(subject.x + 4.50, 1.88, subject.z - .60)
         if (key === 'lab-rear') this.viewFrom.set(subject.x - .96, 1.92, subject.z + 4.67)
         if (key === 'lab-low') this.viewFrom.set(subject.x + 2.28, .42, subject.z - 4.51)
-        if (key === 'lab-orbit') {
-          const d = 4.75 * orbit.zoom
-          this.viewFrom.set(subject.x + Math.sin(orbit.yaw) * Math.cos(orbit.elevation) * d,
-            1.19 + Math.sin(orbit.elevation) * d, subject.z + Math.cos(orbit.yaw) * Math.cos(orbit.elevation) * d)
-        }
         break
     }
     const modeJump = !this.cameraKey || this.cameraKey === 'overhead' || key === 'overhead'
       || key.startsWith('lab') !== this.cameraKey.startsWith('lab')
     const distance = this.camera.position.distanceTo(this.viewFrom) + this.focus.distanceTo(this.viewLook)
-    const blend = snap || modeJump || distance < .033 ? 1 : 1 - Math.exp(-Math.max(dt, .016) * 10)
+    const blend = snap || modeJump || key === 'orbit' || key === 'lab-orbit' || distance < .033 ? 1 : 1 - Math.exp(-Math.max(dt, .016) * 10)
     this.cameraKey = key
     this.camera.position.lerp(this.viewFrom, blend)
     this.focus.lerp(this.viewLook, blend)
@@ -346,7 +359,8 @@ class LiveCourt {
     this.venue.flag(conditions.wind * (end ? -1 : 1), sample?.time ?? this.sceneTime)
     this.venue.flex(sample ? display.netMotion : game.netMotion, end)
     this.venue.board(display.replayScore ?? game.match ?? undefined)
-    this.placeCamera(display.camera, display.orbit, dt, display.leanMotion, player, ball ?? undefined)
+    this.placeCamera(display.camera, display.orbit, dt, display.leanMotion, player, ball ?? undefined, false,
+      game.drill === 'contact' && game.contactSide === 'backhand' ? -1 : 1)
     this.demonstrator.root.visible = false
     this.player.root.visible = true
     this.opponent.root.visible = game.drill !== 'serve'
@@ -355,16 +369,17 @@ class LiveCourt {
       this.venue.surface(conditions.surface)
     }
     this.world.clear()
-    this.swingPath.visible = false
+    this.swingPath.visible = !!display.lesson && display.guides
+    if (this.swingPath.visible) fillTrail(this.swingPath, display.lesson!.swingPath)
     const labels: WorldLabel[] = []
     const feet = sample?.feet ?? { velocity: game.playerMotion, stride: game.playerStride, split: game.splitClock }
-    const { technique, progress } = display.demo
+    const { technique, progress, strike, shot } = display.demo
       ? { technique: game.posture.technique, progress: clamp(.62 + display.demo.time * .76, .62, 1) }
       : sample?.pose ?? game.posture
     const onStrings = sample ? progress >= .62 && progress <= .66 : game.swingClock < .075
     const contact = onStrings && display.contact?.kind === 'racket' ? display.contact.position : null
     const pose = samplePose(technique, progress, {
-      movement: feet.velocity.x / 6.5, depth: feet.velocity.z / 6.5, run: feet.stride, split: feet.split,
+      movement: feet.velocity.x / 6.5, depth: feet.velocity.z / 6.5, run: feet.stride, split: feet.split, strike, shot,
       racketTarget: contact ? vec(contact.x - player.x, contact.y - .014, contact.z - player.z) : undefined,
     })
     this.player.root.position.set(player.x, .014, player.z)
@@ -409,17 +424,22 @@ class LiveCourt {
     this.opponentShadow.position.set(rival.x + .21, .025, rival.z - .10)
 
     const zone = game.zone
-    const receive = game.receiveMark
-    this.feetGuide.visible = !sample && display.guides && game.phase === 'incoming' && !!receive
+    const receive = display.lesson?.mark ?? game.receiveMark
+    this.feetGuide.visible = display.guides && !!receive && (!!display.lesson || !sample && game.phase === 'incoming')
     this.contactGate.visible = this.feetGuide.visible
+    this.heightLine.visible = this.feetGuide.visible && game.drill === 'contact'
     this.bounceGuide.visible = this.feetGuide.visible && !!receive?.bounce
     if (this.feetGuide.visible && receive) {
       this.feetGuide.position.set(receive.feet.x, .032, receive.feet.z)
       this.contactGate.position.set(receive.contact.x, receive.contact.y, receive.contact.z)
       this.contactGate.quaternion.copy(this.camera.quaternion)
+      if (this.heightLine.visible) fillTrail(this.heightLine, [receive.contact, vec(receive.contact.x, .042, receive.contact.z)])
       if (receive.bounce) this.bounceGuide.position.set(receive.bounce.x, .031, receive.bounce.z)
-      if (Math.hypot(receive.feet.x - player.x, receive.feet.z - player.z) > .82)
+      if (display.lesson || Math.hypot(receive.feet.x - player.x, receive.feet.z - player.z) > .82)
         labels.push({ key: 'stance', text: receive.side + ' setup', position: vec(receive.feet.x, .15, receive.feet.z) })
+      if (game.drill === 'contact' || game.take === 'afterBounce') labels.push({ key: 'height',
+        text: contactHeight(receive.contact.y) + ' · ' + receive.contact.y.toFixed(2) + ' m',
+        position: vec(receive.contact.x, receive.contact.y + .21, receive.contact.z) })
     }
     this.target.visible = !sample && display.guides && game.showTarget
     this.target.position.set((zone.xMax + zone.xMin) / 2, .022, (zone.zMax + zone.zMin) / 2)
@@ -428,15 +448,22 @@ class LiveCourt {
     this.aim.position.set(game.aim.x, .027, game.aim.z)
     this.aim.scale.setScalar(display.camera === 'overhead' ? 1.45 : 1)
     const cover = !!game.match && display.guides && (game.phase === 'outgoing' || game.phase === 'opponent')
-    this.recovery.visible = !sample && (cover || game.drill === 'footwork' && (display.guides || game.phase === 'recover'))
+    const lessonRecovery = game.drill === 'contact' && (display.guides || game.phase === 'recover') && (display.lesson && sample
+      ? sample.time > display.lesson.struck + .12 : !sample && (game.phase === 'outgoing' || game.phase === 'recover' || game.phase === 'between'))
+    this.recovery.visible = !!lessonRecovery || !sample && (cover || game.drill === 'footwork' && (display.guides || game.phase === 'recover'))
     this.recovery.position.set(game.recoverySpot.x, .029, game.recoverySpot.z)
     this.recovery.scale.setScalar(game.plan ? game.recoverySize / .85 : 1)
-    this.lanes.visible = !sample && cover && !!game.intercept
-    if (this.lanes.visible) {
+    const showSteps = game.drill === 'contact' && display.guides && !!receive && (this.feetGuide.visible || lessonRecovery)
+    this.lanes.visible = !!showSteps || !sample && cover && !!game.intercept
+    if (showSteps && receive) {
+      const start = display.lesson ? CONTACT_START : player
+      const a = lessonRecovery ? receive.feet : start, b = lessonRecovery ? game.recoverySpot : receive.feet
+      fillTrail(this.lanes, [vec(a.x, .055, a.z), vec(b.x, .055, b.z)])
+    } else if (this.lanes.visible) {
       const hit = game.intercept!.ball
       fillTrail(this.lanes, [vec(-COURT.singles, .06, COURT.service), vec(hit.x, .06, hit.z), vec(COURT.singles, .06, COURT.service)])
     }
-    if ((game.plan || cover) && this.recovery.visible) labels.push({ key: 'recovery', text: cover ? 'Cover the angle' : 'Recovery ring',
+    if ((game.plan || cover || lessonRecovery) && this.recovery.visible) labels.push({ key: 'recovery', text: cover ? 'Cover the angle' : 'Recovery ring',
       position: vec(game.recoverySpot.x - .5, .09, game.recoverySpot.z + .18) })
     this.landing.visible = !sample && !!game.lastLanding && display.guides
     if (game.lastLanding) this.landing.position.set(game.lastLanding.x, .034, game.lastLanding.z)
@@ -475,9 +502,9 @@ class LiveCourt {
 
     if (this.target.visible) labels.push({ key: 'target', text: 'Landing target',
       position: vec((zone.xMin + zone.xMax) / 2, .25, zone.zMin + .22) })
-    if (display.guides && idle && display.preview) labels.push({ key: 'contact', text: 'Contact point',
+    if (display.guides && !sample && idle && display.preview) labels.push({ key: 'contact', text: 'Contact point',
       position: add(display.preview.position, vec(.32, .30, 0)) })
-    const body = display.mode === 'body' ? analyzeMotion(technique, progress, pose) : undefined
+    const body = display.mode === 'body' ? analyzeMotion(technique, progress, pose, strike, shot) : undefined
     if (display.vectors) {
       if (display.mode === 'flight' && activeBall) this.world.flight(activeBall.position, flightForces(activeBall, conditions.wind), !idle, labels)
       if (display.mode === 'contact' && display.contact) {
@@ -524,7 +551,7 @@ class LiveCourt {
     this.labShadow.visible = true
     this.labShadow.position.set(subject.x + pose.hips.x + .21, .025, subject.z - .10)
     this.target.visible = this.aim.visible = this.recovery.visible = this.landing.visible = false
-    this.feetGuide.visible = this.bounceGuide.visible = this.contactGate.visible = false
+    this.feetGuide.visible = this.bounceGuide.visible = this.contactGate.visible = this.heightLine.visible = false
     this.trail.visible = this.projected.visible = this.ballShadow.visible = false
     const labels: WorldLabel[] = []
     this.world.clear()
@@ -662,16 +689,34 @@ class TacticalCourt {
     }
     if (!display.replay) dot(game.aim.x, game.aim.z, 8, '#dcf971', true)
     const player = display.replay?.player ?? game.player
-    if (display.guides && !display.replay && game.phase === 'incoming' && game.receiveMark) {
-      const { feet, bounce } = game.receiveMark
+    const receive = display.lesson?.mark ?? game.receiveMark
+    if (display.guides && receive && (display.lesson || !display.replay && game.phase === 'incoming')) {
+      const { feet, bounce, contact } = receive
       dot(feet.x, feet.z, 9, '#9be2ef', true)
       if (bounce) dot(bounce.x, bounce.z, 4, '#ffc58c', true)
+      if (game.drill === 'contact') {
+        const recovering = display.lesson && display.replay && display.replay.time > display.lesson.struck + .12
+        const target = recovering ? game.recoverySpot : feet
+        ctx.beginPath(); ctx.moveTo(...this.point(player.x, player.z)); ctx.lineTo(...this.point(target.x, target.z))
+        ctx.strokeStyle = '#a6dfeb'; ctx.setLineDash([4, 3]); ctx.stroke(); ctx.setLineDash([])
+        const [x, y] = this.point(contact.x, contact.z)
+        ctx.fillStyle = '#f3f4bf'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'left'
+        ctx.fillText(contact.y.toFixed(2) + ' m', x + 9, y - 12)
+        dot(contact.x, contact.z, 5, '#f3f4bf', true)
+        if (recovering) dot(target.x, target.z, 11, '#9be2ef', true)
+      }
     }
     dot(player.x, player.z, 7, '#eef3df')
     const rival = display.replay?.opponent.position ?? game.opponent
     if (game.drill !== 'serve') dot(rival.x, rival.z, 6, '#dfb679')
     if (!display.replay && (game.drill === 'footwork' || game.match && display.guides && (game.phase === 'outgoing' || game.phase === 'opponent')))
       dot(game.recoverySpot.x, game.recoverySpot.z, 13, '#8ad4ea', true)
+    if (!display.replay && game.drill === 'contact' && (game.phase === 'recover' || display.guides && game.phase === 'outgoing')) {
+      const spot = game.recoverySpot
+      dot(spot.x, spot.z, 12, '#9be2ef', true)
+      ctx.strokeStyle = '#9be2ef'; ctx.setLineDash([4, 3]); ctx.beginPath()
+      ctx.moveTo(...this.point(player.x, player.z)); ctx.lineTo(...this.point(spot.x, spot.z)); ctx.stroke(); ctx.setLineDash([])
+    }
     const partner = game.partner
     const netPlayer = game.netOpponent
     if (partner) dot(partner.x, partner.z, 7, '#8ad4ea')
@@ -740,6 +785,7 @@ export class CourtView {
     this.view.drawGame(game, display)
   }
   get settling() { return this.view instanceof LiveCourt && this.view.settling }
+  captureOrbit() { return this.view instanceof LiveCourt ? this.view.captureOrbit() : null }
   drawLab(display: LabView, dt: number) {
     if (this.view instanceof LiveCourt) this.view.drawLab(display, dt)
     else this.view.drawLab(display)

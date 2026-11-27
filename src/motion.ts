@@ -1,4 +1,4 @@
-import { clamp, type Technique, type Vec3 } from './config.ts'
+import { clamp, type Shot, type Technique, type Vec3 } from './config.ts'
 import { GRAVITY } from './physics.ts'
 
 type Joint = [number, number, number]
@@ -215,7 +215,12 @@ export interface Pose {
   travel: number
 }
 
-interface MotionOptions { movement?: number; depth?: number; run?: number; split?: number; racketTarget?: Vec3 }
+interface MotionOptions { movement?: number; depth?: number; run?: number; split?: number; racketTarget?: Vec3; strike?: Vec3; shot?: Shot }
+
+function smooth(from: number, to: number, t: number) {
+  const s = clamp((t - from) / (to - from), 0, 1)
+  return s * s * (3 - 2 * s)
+}
 
 function pulse(time: number, from: number, to: number) {
   return Math.sin(Math.PI * clamp((time - from) / (to - from), 0, 1)) ** 2
@@ -232,9 +237,15 @@ export function samplePose(technique: Technique, progress: number, options: Moti
   const split = options.split ?? 1
   const splitLift = .10 * pulse(split, .065, .205)
   const dip = .045 * pulse(split, 0, .085) + .095 * pulse(split, .19, .37)
-  const hipsY = value(f => f.hips) - dip + splitLift
+  const strike = technique === 'forehand' || technique === 'backhand' ? options.strike : undefined
+  const adjust = strike ? smooth(.06, .46, t) * (1 - smooth(.67, .99, t)) : 0
+  const heightDelta = strike ? clamp(strike.y - 1.23, -.91, .72) * adjust : 0
+  const shape = strike ? options.shot === 'slice' ? 1 : options.shot === 'flat' ? .32 : 0 : 0
+  const pathOffset = shape * (.48 * pulse(t, .15, .62) - .36 * pulse(t, .62, .98))
+  const crouch = Math.min(0, heightDelta)
+  const hipsY = value(f => f.hips) - dip + splitLift + crouch * .42
   const hipYaw = value(f => f.hipYaw)
-  const chestYaw = value(f => f.chestYaw)
+  const chestYaw = value(f => f.chestYaw) + (technique === 'backhand' ? .68 * adjust : 0)
   const stride = value(f => f.stride ?? 0)
   const sideways = options.movement ?? 0
   const upcourt = options.depth ?? 0
@@ -246,19 +257,38 @@ export function samplePose(technique: Technique, progress: number, options: Moti
     : technique === 'overhead' ? .098 * pulse(t, .49, .74) : technique === 'footwork' ? .115 * pulse(t, .10, .34) : 0
   const travel = technique === 'footwork' ? .44 * pulse(t, .44, 1) : 0
   const weightShift = technique === 'forehand' ? -.10 * pulse(t, .43, .95) + .05 * pulse(t, .16, .54)
-    : technique === 'backhand' ? .09 * pulse(t, .43, .94) : travel
+    : technique === 'backhand' ? .09 * pulse(t, .43, .94) - .14 * adjust : travel
   const hips = vec(lean * .3 + weightShift, hipsY - .045 * effort + Math.abs(runCycle) * .021, -stride * .27)
-  const torso = add(hips, vec(lean * .52, .245, -stride * .1))
+  const torso = add(hips, vec(lean * .52 + (strike ? strike.x * .10 * adjust : 0), .245 + crouch * .043, -stride * .1 + crouch * .14))
   const neck = add(torso, vec(lean * .17, .25, -.014))
   const head = add(neck, vec(0, .149, -.005))
-  const shaft = unit(point('racket'))
+  const racket = point('racket')
+  let shaft = unit(vec(racket.x, racket.y + heightDelta * .92 + pathOffset * .72, racket.z))
   const armLengths = [.331, .299] as const
   const legLengths = [.447, .457] as const
+  const reach = strike ? smooth(.43, .62, t) * (1 - smooth(.62, .79, t)) : 0
+  if (strike && reach > 0) {
+    const shoulder = add(torso, rotateY(vec(.218, .139, 0), chestYaw))
+    const line = subtract(strike, shoulder), distance = magnitude(line), axis = unit(line)
+    const cosine = dot(shaft, axis)
+    const limit = clamp((distance ** 2 + GRIP_TO_STRINGS ** 2 - .628 ** 2) / (2 * Math.max(.001, distance) * GRIP_TO_STRINGS), -1, 1)
+    if (cosine < limit) {
+      const tangent = unit(subtract(shaft, scale(axis, cosine)))
+      const feasible = add(scale(axis, limit), scale(tangent, Math.sqrt(1 - limit ** 2)))
+      shaft = unit(mix(shaft, feasible, reach))
+    }
+  }
 
   function arm(sign: 1 | -1, secondGrip?: Vec3): Arm {
     const shoulder = add(torso, rotateY(vec(sign * .218, .139, 0), chestYaw))
-    let target = add(point(sign > 0 ? 'hand' : 'free'), vec(lean + weightShift, -dip + splitLift, 0))
-    if (secondGrip) target = mix(target, secondGrip, clamp((t - .045) / .15, 0, 1) * clamp((1 - t) / .14, 0, 1))
+    let target = add(point(sign > 0 ? 'hand' : 'free'), vec(lean + weightShift, -dip + splitLift + heightDelta * .54 + pathOffset, crouch * .09))
+    if (strike && sign > 0 && reach > 0) target = mix(target, subtract(strike, scale(shaft, GRIP_TO_STRINGS)), reach)
+    if (secondGrip) {
+      const release = options.shot === 'slice' ? smooth(.36, .60, t) : 0
+      const balance = add(shoulder, vec(-.37, -.10, .34))
+      target = mix(target, balance, release * (1 - smooth(.81, .99, t)))
+      target = mix(target, secondGrip, (1 - release) * clamp((t - .045) / .15, 0, 1) * clamp((1 - t) / .14, 0, 1))
+    }
     const isHit = sign > 0 && options.racketTarget && t >= .59
     const wrist = isHit ? mix(target, subtract(options.racketTarget!, scale(shaft, GRIP_TO_STRINGS)), clamp(1 - (t - .62) * 10, 0, 1)) : target
     const elbowHint = sign > 0 ? add(point('elbow'), vec(lean + weightShift, -dip, 0))
@@ -304,13 +334,13 @@ function flexion(a: Vec3, joint: Vec3, b: Vec3) {
   return 180 - Math.acos(clamp(cosine, -1, 1)) * 180 / Math.PI
 }
 
-export function analyzeMotion(technique: Technique, progress: number, pose = samplePose(technique, progress)) {
+export function analyzeMotion(technique: Technique, progress: number, pose = samplePose(technique, progress), strike?: Vec3, shot?: Shot) {
   const duration = MOTION_DURATION[technique]
   const t = clamp(progress, .022, .978)
-  const a = samplePose(technique, t - .018)
-  const b = samplePose(technique, t + .018)
+  const a = samplePose(technique, t - .018, { strike, shot })
+  const b = samplePose(technique, t + .018, { strike, shot })
   const center = massCenter(pose)
-  const derivativeCenter = massCenter(samplePose(technique, t))
+  const derivativeCenter = massCenter(samplePose(technique, t, { strike, shot }))
   const dt = .018 * duration
   const acceleration = scale(add(subtract(massCenter(a), scale(derivativeCenter, 2)), massCenter(b)), 1 / dt ** 2)
   const [right, left] = pose.legs

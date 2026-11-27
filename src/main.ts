@@ -4,21 +4,25 @@ import { icon } from './icons.ts'
 import { DRILLS, SHOTS, SURFACES, WINDS, clamp, zoneCenter, type DrillId, type Shot, type Surface, type Technique, type Wind } from './config.ts'
 import { TECHNIQUES } from './coaching.ts'
 import type { CourtView, GameView } from './court-view.ts'
-import { COURT_CAMERAS, LAB_CAMERAS, courtOrbit, athleteOrbit, type CameraMode, type LabAngle } from './cameras.ts'
+import { COURT_CAMERAS, LAB_CAMERAS, courtOrbit, athleteOrbit, panOrbit, rotateOrbit, zoomOrbit, type CameraMode, type LabAngle } from './cameras.ts'
 import { analyzeMotion, activeMuscle, BODY_MASS, magnitude, MUSCLES, type MuscleGroup } from './motion.ts'
 import { FORCE_COLORS, type ForceMode } from './analysis-colors.ts'
 import type { BodyState } from './world-analysis.ts'
 import { replayBounds, sampleReplay, type ShotReplay } from './replay.ts'
-import { Game, type Sound, type SoundSpot } from './game.ts'
+import { Game, type Cue, type Sound, type SoundSpot } from './game.ts'
 import { FlightChart } from './chart.ts'
 import { analyzeContact, flightForces, STEP, type Ball, type Contact } from './physics.ts'
 import { SkillPath, planMotion } from './skill-path.ts'
 import { OPPONENTS, type Pace, type Tiebreak } from './point-play.ts'
 import { SessionReview } from './session-review.ts'
+import { bindSceneInput } from './scene-input.ts'
+import { CONTACT_BALLS, type ContactBall, type StrokeSide } from './contact-training.ts'
+import { buildContactDemo, DEMO_PHASES, demoPhase, type ContactDemo } from './contact-demo.ts'
 
 type Page = 'training' | 'ntrp' | 'technique' | 'guide'
 type Direction = 'left' | 'right' | 'up' | 'down'
-type Bests = Partial<Record<DrillId, number>>
+type BestKey = DrillId | `contact-${ContactBall}-${StrokeSide}`
+type Bests = Partial<Record<BestKey, number>>
 type InstallEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> }
 
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T
@@ -121,6 +125,11 @@ const lab = {
   orbit: athleteOrbit(), focus: 'legs' as MuscleGroup, follow: true, playing: false, speed: .5,
 }
 let replay: { clip: ShotReplay; time: number; playing: boolean } | null = null
+let study: ContactDemo | null = null
+let inspected: { mark: NonNullable<Game['receiveMark']>; cue: Cue } | null = null
+let studyKey = '', studyTime = 0, studyPlaying = false, studyOpen = false
+let onContactCourt = false, previousCamera: CameraMode = 'baseline'
+let previousVectors = true
 let preview: Ball | undefined
 let previewKey = ''
 let chartSurface: Surface = surface
@@ -231,15 +240,17 @@ function readTrainingView(playing: boolean): GameView {
     previewKey = key
     preview = game.previewBall
   }
-  const frame = replay ? sampleReplay(replay.clip, replay.time) : undefined
-  const event = replay?.clip.events.findLast(candidate => candidate.time <= replay!.time)
-  const net = replay?.clip.events.findLast(e => e.time <= replay!.time && (e.contact.kind === 'net' || e.contact.kind === 'tape'))
+  const lesson = showingStudy() ? study ?? undefined : undefined
+  const playback = lesson ? { clip: lesson.clip, time: studyTime, playing: studyPlaying } : replay
+  const frame = playback ? sampleReplay(playback.clip, playback.time) : undefined
+  const event = playback?.clip.events.findLast(candidate => candidate.time <= playback.time)
+  const net = playback?.clip.events.findLast(e => e.time <= playback.time && (e.contact.kind === 'net' || e.contact.kind === 'tape'))
   return {
-    ...display, preview: game.phase === 'idle' ? preview : undefined, replay: frame,
-    reviewTrail: replay ? replay.clip.frames.filter(record => record.time <= replay!.time).map(record => record.ball.position).slice(-140) : undefined,
-    contact: replay ? event?.contact ?? null : game.lastContact,
-    playing: playing || !!replay?.playing, leanMotion: reducedMotion.matches, replayScore: replay?.clip.score,
-    netMotion: replay && net ? { contact: net.contact, age: replay.time - net.time } : null,
+    ...display, preview: game.phase === 'idle' ? preview : undefined, replay: frame, lesson,
+    reviewTrail: playback ? playback.clip.frames.filter(record => record.time <= playback.time).map(record => record.ball.position).slice(-140) : undefined,
+    contact: playback ? event?.contact ?? null : game.lastContact,
+    playing: playing || !!playback?.playing, leanMotion: reducedMotion.matches, replayScore: replay?.clip.score,
+    netMotion: playback && net ? { contact: net.contact, age: playback.time - net.time } : null,
   }
 }
 
@@ -258,7 +269,7 @@ function updateForceReadout(view: GameView, renderedBody?: BodyState) {
       return { name: { gravity: 'Weight', drag: 'Air drag', magnus: 'Magnus force' }[key], color: FORCE_COLORS[key],
         value: forces ? `${amount.toFixed(2)} N` : '—', scale: amount / 1.15 }
     })
-    setText('force-source', view.replay ? 'Recorded flight' : game.ball ? 'Live flight' : toss ? 'Opponent toss' : view.preview ? 'Shot preview' : 'Awaiting feed')
+    setText('force-source', view.lesson ? 'Example flight' : view.replay ? 'Recorded flight' : game.ball ? 'Live flight' : toss ? 'Opponent toss' : view.preview ? 'Shot preview' : 'Awaiting feed')
     writeReadout('force-values', rows)
     setText('force-note', 'Weight, air resistance, and the force from spin act throughout the flight.')
   } else if (view.mode === 'contact') {
@@ -445,9 +456,31 @@ function updateTraining() {
   const drill = DRILLS[game.drill]
   const serve = game.serving
   const plan = game.plan
-  const id = plan?.id ?? game.drill
+  const contactCourt = game.drill === 'contact'
+  const id = contactCourt ? [game.drill, game.contactBall, game.contactSide].join('-') : plan?.id ?? game.drill
   if (id !== drillKey) {
     drillKey = id
+    if (contactCourt !== onContactCourt) {
+      if (contactCourt) {
+        previousCamera = display.camera
+        previousVectors = display.vectors
+        display.camera = 'contact'
+        display.vectors = false
+      } else {
+        if (display.camera === 'contact') display.camera = previousCamera
+        display.vectors = previousVectors
+      }
+      byId<HTMLInputElement>('vectors-toggle').checked = display.vectors
+      onContactCourt = contactCourt
+      studyKey = ''
+      studyOpen = studyPlaying = false
+      updateCameraControls()
+    }
+    byId('contact-picker').hidden = !contactCourt
+    if (contactCourt) {
+      byId<HTMLSelectElement>('contact-ball').value = game.contactBall
+      all('[data-contact-side]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.contactSide === game.contactSide)))
+    }
     all<HTMLButtonElement>('[data-drill]').forEach(button =>
       button.setAttribute('aria-pressed', String(!plan && button.dataset.drill === game.drill)))
     const goalLabel = plan ? { placement: 'Target hits', recovery: 'Recoveries', rally: 'Best rally streak', pattern: 'Patterns' }[plan.score] : drill.goalLabel
@@ -464,7 +497,7 @@ function updateTraining() {
     byId('opponent-settings').hidden = !game.match
     byId('drill-score').hidden = !!game.match
     byId('training-panel').classList.toggle('match-court', !!game.match)
-    document.querySelector<HTMLAnchorElement>('[data-nav="training"]')!.href = game.match ? '#match' : '#training'
+    document.querySelector<HTMLAnchorElement>('[data-nav="training"]')!.href = game.match ? '#match' : contactCourt ? '#contact' : '#training'
     setText('open-report', game.match ? 'Scorecard & shot chart' : 'Session review')
     byId('reset-drill').setAttribute('aria-label', game.match ? 'Reset match' : 'Reset drill')
     byId('reset-drill').title = game.match ? 'Reset match' : 'Reset drill'
@@ -479,11 +512,12 @@ function updateTraining() {
       ? 'Aim at the highlighted zone' : game.drill === 'footwork' ? 'Use the recovery ring' : 'Choose an aim point across the net'
   }
 
-  if (!game.match && !plan && game.progress > Math.max(0, Number(best[game.drill]) || 0)) {
-    best[game.drill] = game.progress
+  const bestId: BestKey = contactCourt ? `contact-${game.contactBall}-${game.contactSide}` : game.drill
+  if (!game.match && !plan && game.progress > Math.max(0, Number(best[bestId]) || 0)) {
+    best[bestId] = game.progress
     savePreferences()
   }
-  const currentBest = plan ? skillPath.record(plan, game.progress) : best[game.drill] ?? 0
+  const currentBest = plan ? skillPath.record(plan, game.progress) : best[bestId] ?? 0
   const score = [id, game.progress, game.attempts, game.streak, currentBest].join()
   if (score !== scoreKey) {
     scoreKey = score
@@ -503,7 +537,7 @@ function updateTraining() {
   byId('court-wind').hidden = !courtWind
   if (courtWind) setText('court-wind', (courtWind > 0 ? 'Wind → ' : 'Wind ← ') + Math.abs(courtWind).toFixed(1) + ' m/s')
   const action = game.match ? !game.active ? game.phase === 'finished' ? 'Rematch' : 'Start Match' : game.paused ? 'Resume Match' : 'Pause Match' : !game.active
-    ? game.phase === 'finished' ? 'Restart Drill' : 'Start Drill'
+    ? contactCourt ? 'Practice feed' : game.phase === 'finished' ? 'Restart Drill' : 'Start Drill'
     : game.paused ? 'Resume Drill' : 'Pause Drill'
   if (actionKey !== action) {
     actionKey = action
@@ -522,14 +556,17 @@ function updateTraining() {
     title: success ? 'Drill complete' : 'Session complete',
     detail: success ? `${game.goal} / ${game.goal} · Goal reached` : `${game.progress} / ${game.goal} · Restart for another set`,
     tone: success ? 'good' : 'neutral',
-  } : game.cue()
-  const signature = [game.phase, game.paused, cue.title, cue.detail, game.lastShot?.speed, game.lastShot?.clearance, game.lastShot?.timing].join()
+  } : game.paused && inspected && game.receiveMark === inspected.mark ? inspected.cue : game.cue()
+  updateContactStudy()
+  const example = showingStudy() && !!study
+  const signature = [game.phase, game.paused, example, cue.title, cue.detail, game.lastShot?.speed, game.lastShot?.clearance, game.lastShot?.timing].join()
   if (signature !== cueKey) {
     cueKey = signature
+    byId('training-panel').dataset.study = String(example)
     const idle = game.phase === 'idle'
-    byId('aim-hint').hidden = !idle
+    byId('aim-hint').hidden = !idle || example
     const cueBox = byId('court-cue')
-    cueBox.hidden = idle
+    cueBox.hidden = idle || example
     cueBox.dataset.tone = cue.tone
     byId('cue-title').textContent = cue.title
     byId('cue-detail').textContent = cue.detail
@@ -539,7 +576,7 @@ function updateTraining() {
     }
     byId('timing-track').hidden = game.phase !== 'incoming' || game.paused
     const telemetry = game.lastShot
-    byId('telemetry').hidden = !telemetry
+    byId('telemetry').hidden = !telemetry || example
     if (telemetry) {
       byId('telemetry-speed').textContent = `${Math.round(telemetry.speed * 3.6)} km/h`
       const clearance = telemetry.clearance === null ? '' : telemetry.clearance < 0 ? ' · net' : ` · ${telemetry.clearance.toFixed(2)} m net`
@@ -560,6 +597,38 @@ function labPhase() {
   const phases = TECHNIQUES[lab.technique].phases
   const next = phases.findIndex((phase, index) => index > 0 && lab.time < (phases[index - 1].time + phase.time) / 2)
   return next < 0 ? phases.length - 1 : next - 1
+}
+
+function showingStudy() {
+  return page === 'training' && game.drill === 'contact' && !replay && (game.phase === 'idle' || studyOpen)
+}
+
+function updateContactStudy() {
+  const visible = showingStudy()
+  const panel = byId('contact-study')
+  panel.hidden = !visible
+  if (!visible) { studyPlaying = false; return }
+  const key = [game.contactBall, game.contactSide, game.shot, game.conditions.surface, game.conditions.wind].join()
+  if (key !== studyKey) {
+    studyKey = key
+    study = buildContactDemo(game.contactBall, game.contactSide, game.conditions, game.shot)
+    studyTime = study?.struck ?? 0
+    studyPlaying = false
+  }
+  if (!study) { panel.hidden = true; return }
+  const phase = demoPhase(study, studyTime)
+  const side = game.contactSide === 'forehand' ? 'Forehand' : 'Backhand'
+  setText('contact-study-title', CONTACT_BALLS[game.contactBall].label + ' · ' + side)
+  setText('contact-study-cue', study.cues[phase])
+  const button = byId('contact-play'), label = studyPlaying ? 'Pause example' : 'Play example'
+  if (button.getAttribute('aria-label') !== label) {
+    button.setAttribute('aria-label', label)
+    button.innerHTML = icon(studyPlaying ? 'pause' : 'play', 16)
+  }
+  const progress = byId<HTMLInputElement>('contact-scrub')
+  progress.value = String(Math.round((studyTime - study.start) / (study.end - study.start) * 1000))
+  progress.setAttribute('aria-valuetext', DEMO_PHASES[phase] + ' · ' + (studyTime - study.start).toFixed(1) + ' seconds')
+  all('[data-contact-phase]').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.contactPhase) === phase)))
 }
 
 function updateLab() {
@@ -614,14 +683,15 @@ function chartConditions() {
 
 function route() {
   const hash = location.hash.slice(1)
-  if (hash !== '' && hash !== 'match' && hash !== 'training' && hash !== 'ntrp' && hash !== 'technique' && hash !== 'guide') return
-  if (hash === 'match' && !game.match) { closeReplay(); game.select('match') }
-  if (hash !== 'match' && (hash === '' || hash === 'training') && game.match) { closeReplay(); game.select('forehand') }
-  const next: Page = hash === 'match' ? 'training' : hash || 'training'
+  if (!['', 'match', 'contact', 'training', 'ntrp', 'technique', 'guide'].includes(hash)) return
+  if ((hash === 'match' || hash === 'contact') && game.drill !== hash) { closeReplay(); game.select(hash) }
+  if ((hash === '' || hash === 'training') && (game.match || game.drill === 'contact')) { closeReplay(); game.select('forehand') }
+  const next: Page = hash === 'match' || hash === 'contact' || !hash ? 'training' : hash as Page
   if (next !== page) {
     if (replay) closeReplay()
     closeDrawers()
     if (page === 'training' && game.active) game.paused = true
+    studyPlaying = false
     if (page === 'technique') lab.playing = false
     if (page === 'ntrp') skillPath.stopPreview()
     keys.clear()
@@ -652,6 +722,8 @@ function focusCourt() {
 
 function toggleDrill() {
   wakeAudio()
+  inspected = null
+  studyOpen = studyPlaying = false
   if (replay) closeReplay()
   if (game.active) game.paused = !game.paused
   else game.begin()
@@ -665,7 +737,8 @@ function selectDrill(drill: DrillId) {
   if (!game.plan && game.drill === drill) return
   if (replay) closeReplay()
   game.select(drill)
-  if (page === 'training' && (drill === 'match' || location.hash === '#match')) location.hash = drill === 'match' ? 'match' : 'training'
+  if (page === 'training' && (drill === 'contact' || drill === 'match' || ['#contact', '#match'].includes(location.hash)))
+    location.hash = drill === 'match' || drill === 'contact' ? drill : 'training'
   closeDrawers()
   updateTraining()
   dirty = true
@@ -718,11 +791,54 @@ byId('show-help').onclick = openHelp
 byId('start-drill').onclick = toggleDrill
 byId('quiet-play').onclick = toggleDrill
 byId('study-drill').onclick = () => {
-  lab.technique = game.plan ? planMotion(game.plan) : game.match ? game.serving ? 'serve' : 'forehand' : game.drill === 'rally' || game.drill === 'match' ? 'backhand' : game.drill
+  lab.technique = game.plan ? planMotion(game.plan) : game.match ? game.serving ? 'serve' : 'forehand' : game.drill === 'contact'
+    ? game.contactSide : game.drill === 'rally' || game.drill === 'match' ? 'backhand' : game.drill
   setLabPhase(0)
 }
 function resetDrill() { closeReplay(); game.reset(); updateTraining(); dirty = true }
 byId('reset-drill').onclick = resetDrill
+function changeFeed(ball: ContactBall, side: StrokeSide) {
+  closeReplay()
+  game.selectContact(ball, side)
+  studyKey = ''
+  updateTraining()
+  dirty = true
+}
+byId<HTMLSelectElement>('contact-ball').onchange = e => changeFeed((e.currentTarget as HTMLSelectElement).value as ContactBall, game.contactSide)
+all('[data-contact-side]').forEach(b => b.onclick = () => {
+  if (b.dataset.contactSide !== game.contactSide) changeFeed(game.contactBall, b.dataset.contactSide as StrokeSide)
+})
+byId('contact-change').onclick = () => {
+  openDrawer('session', byId('training-panel'))
+  byId('contact-ball').focus({ preventScroll: true })
+}
+byId('show-contact-study').onclick = () => {
+  if (game.active) game.paused = true
+  closeReplay()
+  studyOpen = true
+  closeDrawers()
+  updateTraining()
+  byId('contact-play').focus({ preventScroll: true })
+  dirty = true
+}
+byId('contact-play').onclick = () => {
+  if (!study) return
+  if (!studyPlaying && (studyTime >= study.end - .01 || Math.abs(studyTime - study.struck) < .001)) studyTime = study.start
+  studyPlaying = !studyPlaying
+  dirty = true
+}
+byId<HTMLInputElement>('contact-scrub').oninput = e => {
+  if (!study) return
+  studyPlaying = false
+  studyTime = study.start + (study.end - study.start) * Number((e.currentTarget as HTMLInputElement).value) / 1000
+  dirty = true
+}
+all('[data-contact-phase]').forEach(b => b.onclick = () => {
+  if (!study) return
+  studyPlaying = false
+  studyTime = study.times[Number(b.dataset.contactPhase)]
+  dirty = true
+})
 for (const id of ['open-report', 'board-details', 'finish-review']) byId(id).onclick = openReport
 byId<HTMLSelectElement>('match-pace').onchange = event => {
   const pace = (event.currentTarget as HTMLSelectElement).value as Pace
@@ -804,42 +920,36 @@ all<HTMLButtonElement>('[data-move]').forEach(button => {
   button.onpointercancel = release
   button.onlostpointercapture = release
 })
-function wireCourtInput(canvas: HTMLCanvasElement) {
-  let drag: { id: number; x: number; y: number } | null = null
-  const currentOrbit = () => page === 'technique' ? lab.orbit : page === 'ntrp' ? skillPath.orbit : display.orbit
-  const usingOrbit = () => (page === 'technique' ? lab.angle : page === 'ntrp' ? skillPath.camera : display.camera) === 'orbit'
-  canvas.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || !usingOrbit() || court?.fallback) return
-    canvas.setPointerCapture(event.pointerId)
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY }
-  })
-  canvas.addEventListener('pointermove', event => {
-    if (!drag || drag.id !== event.pointerId) return
-    const orbit = currentOrbit()
-    orbit.yaw -= (event.clientX - drag.x) * .008
-    orbit.elevation = clamp(orbit.elevation + (event.clientY - drag.y) * .007, page === 'technique' ? -.18 : .15, 1.16)
-    drag.x = event.clientX
-    drag.y = event.clientY
-    dirty = true
-  })
-  canvas.addEventListener('pointerup', event => {
-    if (drag || usingOrbit()) { drag = null; return }
-    if (page !== 'training' || replay || event.button !== 0) return
-    const point = court?.aimAt(event.clientX, event.clientY)
-    if (point) {
-      game.setAim(point.x, point.z)
-      focusCourt()
-      dirty = true
-    }
-  })
-  canvas.addEventListener('lostpointercapture', () => { drag = null })
-  canvas.addEventListener('wheel', event => {
-    if (!usingOrbit()) return
-    event.preventDefault()
-    const orbit = currentOrbit()
-    orbit.zoom = clamp(orbit.zoom + Math.sign(event.deltaY) * .055, .6, 1.55)
+function interactiveOrbit() {
+  if (!court || court.fallback || page === 'guide') return null
+  const camera = page === 'technique' ? lab.angle : page === 'ntrp' ? skillPath.camera : display.camera
+  const settings = page === 'technique' ? lab : page === 'ntrp' ? skillPath : display
+  if (camera !== 'orbit') {
+    const current = court.captureOrbit()
+    if (!current) return null
+    settings.orbit = current
+    if (page === 'technique') lab.angle = 'orbit'
+    else if (page === 'ntrp') skillPath.camera = 'orbit'
+    else display.camera = 'orbit'
     updateCameraControls()
-  }, { passive: false })
+  }
+  return settings.orbit
+}
+
+function wireCourtInput(canvas: HTMLCanvasElement) {
+  bindSceneInput(byId('app'), canvas, !court!.fallback, {
+    orbit: interactiveOrbit, closeup: () => page === 'technique', changed: updateCameraControls,
+    aim: (x, y) => {
+      if (page !== 'training' || replay) return
+      const point = court?.aimAt(x, y)
+      if (point) {
+        game.setAim(point.x, point.z)
+        byId('feedback').textContent = 'Aim set ' + Math.abs(point.x).toFixed(1) + ' m ' + (point.x < 0 ? 'left' : 'right') + ' of center, ' + Math.abs(point.z).toFixed(1) + ' m past the net.'
+        focusCourt()
+        dirty = true
+      }
+    },
+  })
 }
 all<HTMLButtonElement>('[data-fullscreen]').forEach(button => button.onclick = () => { void toggleFullscreen(button.dataset.fullscreen!) })
 all<HTMLButtonElement>('button[data-drawer]').forEach(button => button.onclick = () => {
@@ -924,6 +1034,20 @@ all('.world-labels').forEach(host => host.onclick = event => {
     byId('ntrp-skill-title').setAttribute('tabindex', '-1')
     byId('ntrp-skill-title').focus({ preventScroll: true })
   } else if (page === 'training') {
+    if ((marker === 'stance' || marker === 'height') && game.drill === 'contact') {
+      byId('show-contact-study').click()
+      return
+    }
+    if ((marker === 'stance' || marker === 'height') && game.phase === 'incoming' && game.receiveMark && !game.paused) {
+      const mark = game.receiveMark
+      const cue = game.cue()
+      inspected = { mark, cue: { title: mark.side + ' · ' + mark.contact.y.toFixed(2) + ' m',
+        detail: (cue.title.startsWith('Move ') ? cue.title + '. ' : '') + cue.detail, tone: 'neutral' } }
+      game.paused = true
+      keys.clear(); touches.clear()
+      dirty = true
+      return
+    }
     if (marker === 'target') {
       const center = zoneCenter(game.zone)
       game.setAim(center.x, center.z)
@@ -1009,11 +1133,21 @@ window.addEventListener('keydown', event => {
     : page === 'ntrp' && skillPath.camera === 'orbit' ? skillPath.orbit
     : page === 'training' && display.camera === 'orbit' && (!game.active || game.paused) ? display.orbit : null
   if (orbit && event.code.startsWith('Arrow')) {
-    orbit.yaw += event.code === 'ArrowLeft' ? -.13 : event.code === 'ArrowRight' ? .13 : 0
-    orbit.elevation = clamp(orbit.elevation + (event.code === 'ArrowUp' ? .095 : event.code === 'ArrowDown' ? -.095 : 0),
-      page === 'technique' ? -.18 : .15, 1.16)
-    dirty = true
+    const x = Number(event.code === 'ArrowRight') - Number(event.code === 'ArrowLeft')
+    const y = Number(event.code === 'ArrowUp') - Number(event.code === 'ArrowDown')
+    if (event.shiftKey) panOrbit(orbit, -x * 30, y * 30, court!.canvas.clientHeight, page === 'technique')
+    else rotateOrbit(orbit, -x * .13, y * .095)
     event.preventDefault()
+    dirty = true
+    return
+  }
+  if (['Equal', 'Minus', 'NumpadAdd', 'NumpadSubtract'].includes(event.code)) {
+    const view = interactiveOrbit()
+    if (view) {
+      zoomOrbit(view, event.code === 'Equal' || event.code === 'NumpadAdd' ? 1 / 1.14 : 1.14)
+      updateCameraControls()
+      event.preventDefault()
+    }
     return
   }
   if (page !== 'training') return
@@ -1048,7 +1182,7 @@ window.addEventListener('keyup', event => keys.delete(event.code))
 window.addEventListener('blur', () => { keys.clear(); touches.clear() })
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && game.active) game.paused = true
-  if (document.hidden) { lab.playing = false; skillPath.stopPreview(); if (replay) replay.playing = false }
+  if (document.hidden) { lab.playing = studyPlaying = false; skillPath.stopPreview(); if (replay) replay.playing = false }
   dirty = true
 })
 window.addEventListener('hashchange', route)
@@ -1106,7 +1240,7 @@ function stepAnimation(now: number) {
   previousFrame = now
   const playing = page === 'training' && game.active && !game.paused
   const pathPlaying = page === 'ntrp' && skillPath.animating
-  const wasPlaying = playing || (page === 'technique' && lab.playing) || pathPlaying || !!replay?.playing
+  const wasPlaying = playing || (page === 'technique' && lab.playing) || pathPlaying || !!replay?.playing || studyPlaying
   if (playing) {
     const touch = new Set(touches.values())
     const held = (direction: Direction) => Number(touch.has(direction) || movement[direction].some(key => keys.has(key)))
@@ -1128,7 +1262,11 @@ function stepAnimation(now: number) {
     if (replay.time >= end) replay.playing = false
   }
   if (pathPlaying) skillPath.advance(dt, game.conditions)
-  const animating = (playing && game.active) || (page === 'technique' && lab.playing) || (pathPlaying && skillPath.animating) || !!replay?.playing
+  if (showingStudy() && study && studyPlaying) {
+    studyTime = Math.min(study.end, studyTime + dt * .5)
+    if (studyTime >= study.end) studyPlaying = false
+  }
+  const animating = (playing && game.active) || (page === 'technique' && lab.playing) || (pathPlaying && skillPath.animating) || !!replay?.playing || studyPlaying
   const cameraMoving = !!court?.settling && !reducedMotion.matches
   const actionInterval = reducedMotion.matches ? 31 : 22
   if (page !== 'guide' && (dirty || (wasPlaying && !animating) || ((animating || cameraMoving) && now - lastRender >= actionInterval))) {

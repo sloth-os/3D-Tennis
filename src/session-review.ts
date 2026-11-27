@@ -3,7 +3,7 @@ import { TECHNIQUES } from './coaching.ts'
 import type { Game, ShotMetrics } from './game.ts'
 import { icon } from './icons.ts'
 import { lineDistance, OPPONENTS, type Tiebreak } from './point-play.ts'
-import type { ShotReplay } from './replay.ts'
+import { sampleReplay, type ShotReplay } from './replay.ts'
 
 export function reportMarkup() {
   return `<dialog class="report-dialog" id="session-report" aria-labelledby="report-title">
@@ -173,6 +173,14 @@ export class SessionReview {
     const error = s.landing ? Math.hypot(s.landing.x - s.aim.x, s.landing.z - s.aim.z).toFixed(2) + ' m' : '—'
     const rows = [['Ball speed', Math.round(s.speed * 3.6) + ' km/h'], ['Timing', timing], ['Spin', s.spin + ' rpm'],
       ['Net clearance', s.clearance === null ? '—' : s.clearance.toFixed(2) + ' m'], ['Distance from aim', error]]
+    const hit = s.clip.events.find(e => e.contact.kind === 'racket')
+    if (hit) {
+      const { player } = sampleReplay(s.clip, hit.time)
+      const point = hit.contact.position, ahead = player.z - point.z
+      rows.push(['Contact height', point.y.toFixed(2) + ' m'],
+        ['Beside the stance', Math.abs(point.x - player.x).toFixed(2) + ' m ' + (point.x >= player.x ? 'right' : 'left')],
+        [ahead >= 0 ? 'In front of stance' : 'Behind stance', Math.abs(ahead).toFixed(2) + ' m'])
+    }
     document.getElementById('report-values')!.innerHTML = rows.map(([name, value]) => `<div><span>${name}</span><strong>${value}</strong></div>`).join('')
     document.getElementById('report-line')!.textContent = s.call ? lineDistance(s.call) + '.' : 'The ball struck the net before landing.'
   }

@@ -72,9 +72,15 @@ export const DRILLS = {
     cardDescription: 'Play a singles tiebreak.', goal: 7, goalLabel: 'Your points', shot: 'topspin',
     coach: 'Push your opponent wide, recover across the likely replies, then change direction into the open court.',
   },
+  contact: {
+    title: 'Contact Points', icon: 'crosshair', theme: 'blue',
+    description: 'Read the feed, move to the shoe marks and meet the ball at the contact ring.',
+    cardDescription: 'Study and play seven different feeds.', goal: 3, goalLabel: 'Hit + recover', shot: 'topspin',
+    coach: 'Adjust the feet first. Leave space beside the hip and meet the ball in front.',
+  },
 } as const
 
-export const DRILL_ORDER: DrillId[] = ['forehand', 'serve', 'footwork', 'rally', 'match']
+export const DRILL_ORDER: DrillId[] = ['forehand', 'serve', 'footwork', 'rally', 'match', 'contact']
 
 export function targetFor(drill: DrillId, adSide: boolean): Zone {
   if (drill === 'serve') {
