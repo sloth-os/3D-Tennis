@@ -180,7 +180,7 @@ export class SkillPath {
       return
     }
     if (!this.sample) return
-    this.demo = { ...this.sample, position: { ...this.sample.position }, velocity: { ...this.sample.velocity } }
+    this.demo = { ...this.sample, position: { ...this.sample.position }, velocity: { ...this.sample.velocity }, rotation: { ...this.sample.rotation } }
     this.elapsed = this.remainder = 0
     this.trail = []
     this.updatePlayButton()

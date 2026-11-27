@@ -21,7 +21,7 @@ export class FlightChart {
     }
     this.values.innerHTML = this.series.map(({ config, flight, drift }) => `<tr>
       <th scope="row"><i class="legend-dot" style="--series:${config.color}"></i>${config.label}</th>
-      <td>${config.spin.toLocaleString('en-US')} rpm</td>
+      <td>${config.spin.toLocaleString('en-US')}<span class="rebound-spin">${flight.reboundSpin === null ? '—' : '→ ' + Math.round(flight.reboundSpin).toLocaleString('en-US')} rpm</span></td>
       <td>${flight.net ? 'Net' : flight.clearance === null ? '—' : `${flight.clearance.toFixed(2)} m`}</td>
       <td>${flight.bounceHeight.toFixed(2)} m</td>
       <td>${drift === null ? '—' : `${Math.abs(drift).toFixed(2)} m${Math.abs(drift) >= .005 ? drift > 0 ? ' right' : ' left' : ''}`}</td>

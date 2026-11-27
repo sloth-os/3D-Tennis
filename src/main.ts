@@ -9,10 +9,12 @@ import { analyzeMotion, activeMuscle, BODY_MASS, magnitude, MUSCLES, type Muscle
 import { FORCE_COLORS, type ForceMode } from './analysis-colors.ts'
 import type { BodyState } from './world-analysis.ts'
 import { replayBounds, sampleReplay, type ShotReplay } from './replay.ts'
-import { Game, type Sound } from './game.ts'
+import { Game, type Sound, type SoundSpot } from './game.ts'
 import { FlightChart } from './chart.ts'
 import { analyzeContact, flightForces, STEP, type Ball, type Contact } from './physics.ts'
 import { SkillPath, planMotion } from './skill-path.ts'
+import { OPPONENTS, type Pace, type Tiebreak } from './point-play.ts'
+import { SessionReview } from './session-review.ts'
 
 type Page = 'training' | 'ntrp' | 'technique' | 'guide'
 type Direction = 'left' | 'right' | 'up' | 'down'
@@ -28,6 +30,7 @@ byId('app').innerHTML = appMarkup()
 function readPreferences(): {
   surface?: Surface; wind?: Wind; trail?: boolean; guides?: boolean; audio?: boolean; best?: Bests;
   ntrpLevel?: unknown; ntrpRecords?: unknown;
+  pace?: Pace; matchesWon?: number; matchesPlayed?: number
 } {
   try {
     return JSON.parse(localStorage.getItem(storageKey) ?? '{}') ?? {}
@@ -38,9 +41,44 @@ function readPreferences(): {
 
 let audioEnabled = saved.audio === true
 let audioContext: AudioContext | undefined
-function playSound(type: Sound) {
+let impactNoise: AudioBuffer | undefined
+function playSound(type: Sound, spot?: SoundSpot) {
   if (!audioEnabled || !audioContext || audioContext.state !== 'running') return
   const now = audioContext.currentTime
+  if (spot && (type === 'bounce' || type === 'hit')) {
+    impactNoise ??= audioContext.createBuffer(1, Math.ceil(audioContext.sampleRate * .16), audioContext.sampleRate)
+    const samples = impactNoise.getChannelData(0)
+    if (samples[0] === 0) {
+      for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1
+    }
+    const racket = type === 'hit'
+    const bright = { hard: 1, clay: .73, grass: .49 }[spot.surface]
+    const pan = audioContext.createStereoPanner()
+    pan.pan.value = clamp(spot.x / 7, -.85, .85)
+    pan.connect(audioContext.destination)
+    const body = audioContext.createOscillator()
+    const gain = audioContext.createGain()
+    const frequency = racket ? 265 + spot.speed * 1.4 : 96 + bright * 65
+    body.frequency.setValueAtTime(frequency, now)
+    body.frequency.exponentialRampToValueAtTime(racket ? 104 : 60, now + .078)
+    gain.gain.setValueAtTime(clamp(spot.speed / (racket ? 90 : 41), .06, .24), now)
+    gain.gain.exponentialRampToValueAtTime(.001, now + .105)
+    body.connect(gain).connect(pan)
+    const noise = audioContext.createBufferSource()
+    noise.buffer = impactNoise
+    const filter = audioContext.createBiquadFilter()
+    filter.type = 'bandpass'
+    filter.frequency.value = racket ? 1700 + spot.speed * 24 : 1550 * bright
+    filter.Q.value = racket ? .88 : .56
+    const snap = audioContext.createGain()
+    snap.gain.setValueAtTime(racket ? .31 : .13 * bright, now)
+    snap.gain.exponentialRampToValueAtTime(.001, now + (racket ? .054 : .042))
+    noise.connect(filter).connect(snap).connect(pan)
+    body.start(now); noise.start(now)
+    body.stop(now + .118); noise.stop(now + .072)
+    body.onended = () => pan.disconnect()
+    return
+  }
   const pitches: Record<Sound, [number, number, number]> = {
     bounce: [128, 66, .078], hit: [222, 99, .093], good: [470, 680, .17], miss: [200, 128, .124], ready: [385, 425, .064],
   }
@@ -65,6 +103,10 @@ function wakeAudio() {
 }
 
 const game = new Game(playSound)
+game.pace = saved.pace && Object.hasOwn(OPPONENTS, saved.pace) ? saved.pace : 'club'
+let matchesPlayed = Math.max(0, Math.floor(Number(saved.matchesPlayed) || 0))
+let matchesWon = Math.min(matchesPlayed, Math.max(0, Math.floor(Number(saved.matchesWon) || 0)))
+let countedMatch: Tiebreak | null = null
 let surface: Surface = saved.surface && Object.hasOwn(SURFACES, saved.surface) ? saved.surface : 'hard'
 let wind: Wind = saved.wind && Object.hasOwn(WINDS, saved.wind) ? saved.wind : 'calm'
 const display = {
@@ -86,6 +128,7 @@ let chartWind: Wind = wind
 let chartCustomized = false
 const chart = new FlightChart(byId<HTMLCanvasElement>('flight-chart'), byId('flight-values'))
 const help = byId<HTMLDialogElement>('controls-dialog')
+const report = new SessionReview(clip => openReplay(clip))
 const keys = new Set<string>()
 const touches = new Map<number, Direction>()
 let page: Page = 'training'
@@ -97,6 +140,7 @@ let actionKey = ''
 let cueKey = ''
 let lessonKey = ''
 let currentLabPhase = -1
+let boardKey = ''
 let court: CourtView | undefined
 let loadingCourt = false
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)')
@@ -151,7 +195,7 @@ function attachCourt() {
 function savePreferences() {
   try {
     localStorage.setItem(storageKey, JSON.stringify({ surface, wind, trail: display.trail, guides: display.guides,
-      audio: audioEnabled, best, ntrpLevel: skillPath.level, ntrpRecords: skillPath.records }))
+      audio: audioEnabled, best, ntrpLevel: skillPath.level, ntrpRecords: skillPath.records, pace: game.pace, matchesWon, matchesPlayed }))
   } catch {
     // Preferences are optional when storage is unavailable.
   }
@@ -189,29 +233,32 @@ function readTrainingView(playing: boolean): GameView {
   }
   const frame = replay ? sampleReplay(replay.clip, replay.time) : undefined
   const event = replay?.clip.events.findLast(candidate => candidate.time <= replay!.time)
+  const net = replay?.clip.events.findLast(e => e.time <= replay!.time && (e.contact.kind === 'net' || e.contact.kind === 'tape'))
   return {
     ...display, preview: game.phase === 'idle' ? preview : undefined, replay: frame,
     reviewTrail: replay ? replay.clip.frames.filter(record => record.time <= replay!.time).map(record => record.ball.position).slice(-140) : undefined,
     contact: replay ? event?.contact ?? null : game.lastContact,
-    playing: playing || !!replay?.playing, leanMotion: reducedMotion.matches,
+    playing: playing || !!replay?.playing, leanMotion: reducedMotion.matches, replayScore: replay?.clip.score,
+    netMotion: replay && net ? { contact: net.contact, age: replay.time - net.time } : null,
   }
 }
 
-const contactName = (kind: Contact['kind']) => kind === 'racket' ? 'Racket contact' : kind === 'court' ? 'Court bounce' : 'Net impact'
+const contactName = (kind: Contact['kind']) => ({ racket: 'Racket contact', court: 'Court bounce', net: 'Net impact', tape: 'Net cord' })[kind]
 const newtons = (value: number) => `${Math.round(value)} N`
 
 function updateForceReadout(view: GameView, renderedBody?: BodyState) {
   byId<HTMLButtonElement>('review-open').disabled = !game.replay || !!replay
   if (view.mode === 'flight') {
-    const ball = view.replay?.ball ?? game.ball ?? view.preview
-    const wind = view.replay?.conditions.wind ?? game.conditions.wind
+    const toss = game.opponentToss
+    const ball = view.replay?.ball ?? game.ball ?? toss ?? view.preview
+    const wind = view.replay?.conditions.wind ?? game.courtConditions.wind
     const forces = ball ? flightForces(ball, wind) : null
     const rows = (['gravity', 'drag', 'magnus'] as const).map(key => {
       const amount = forces ? magnitude(forces[key]) : 0
       return { name: { gravity: 'Weight', drag: 'Air drag', magnus: 'Magnus force' }[key], color: FORCE_COLORS[key],
         value: forces ? `${amount.toFixed(2)} N` : '—', scale: amount / 1.15 }
     })
-    setText('force-source', view.replay ? 'Recorded flight' : game.ball ? 'Live flight' : view.preview ? 'Shot preview' : 'Awaiting feed')
+    setText('force-source', view.replay ? 'Recorded flight' : game.ball ? 'Live flight' : toss ? 'Opponent toss' : view.preview ? 'Shot preview' : 'Awaiting feed')
     writeReadout('force-values', rows)
     setText('force-note', 'Weight, air resistance, and the force from spin act throughout the flight.')
   } else if (view.mode === 'contact') {
@@ -297,10 +344,9 @@ function setForceMode(mode: ForceMode) {
   dirty = true
 }
 
-function openReplay() {
-  if (!game.replay) return
+function openReplay(clip: ShotReplay | null = game.replay) {
+  if (!clip) return
   game.paused = game.active
-  const clip = game.replay
   replay = { clip, time: clip.events.at(-1)!.time, playing: false }
   closeDrawers()
   setForceMode('contact')
@@ -350,6 +396,51 @@ function updateReplay() {
   })
 }
 
+function openReport() {
+  if (game.active) game.paused = true
+  closeReplay()
+  closeDrawers()
+  keys.clear()
+  touches.clear()
+  report.open(game)
+  dirty = true
+}
+
+function updateBoard() {
+  const match = game.match
+  const board = byId('match-board')
+  board.hidden = !match || !!replay
+  byId<HTMLButtonElement>('open-report').disabled = !game.shots.length && !match && game.phase !== 'finished'
+  byId('finish-review').hidden = game.phase !== 'finished'
+  if (!match) { boardKey = ''; return }
+  if (match.finished && countedMatch !== match) {
+    countedMatch = match
+    matchesPlayed++
+    if (match.you > match.rival) matchesWon++
+    savePreferences()
+  }
+  const key = [match.you, match.rival, match.servingPoint, match.serve, match.ad, match.end, match.serviceBall,
+    game.phase, game.paused, game.pace, matchesWon, matchesPlayed].join()
+  if (key === boardKey) return
+  boardKey = key
+  setText('board-your-score', String(match.you))
+  setText('board-rival-score', String(match.rival))
+  setText('board-end', match.end ? 'South end' : 'North end')
+  for (const [id, side] of [['board-you', 'you'], ['board-rival', 'rival']]) {
+    byId(id).dataset.server = String(match.servingPoint === side && !match.finished)
+    byId(id).title = match.servingPoint === side ? 'Serving this point' : 'Receiving this point'
+  }
+  const service = (match.servingPoint === 'you' ? 'You serve' : 'You receive') + ' · ' + (match.ad ? 'Ad' : 'Deuce')
+  setText('board-state', match.finished ? 'Final · Match review' : game.phase === 'between' && game.result.title.includes('point') ? 'Point log · ' + match.you + ' – ' + match.rival
+    : match.pointBall && game.phase !== 'between' ? match.pointBall
+    : match.serve === 2 && match.serviceBall ? 'Second serve · ' + (match.ad ? 'Ad' : 'Deuce') : service)
+  setText('compact-score', match.you + ' – ' + match.rival)
+  setText('compact-score-label', 'Tiebreak')
+  setText('open-report', 'Scorecard & shot chart')
+  byId<HTMLSelectElement>('match-pace').disabled = game.active
+  byId<HTMLSelectElement>('match-pace').value = game.pace
+}
+
 function updateTraining() {
   const drill = DRILLS[game.drill]
   const serve = game.serving
@@ -360,7 +451,7 @@ function updateTraining() {
     all<HTMLButtonElement>('[data-drill]').forEach(button =>
       button.setAttribute('aria-pressed', String(!plan && button.dataset.drill === game.drill)))
     const goalLabel = plan ? { placement: 'Target hits', recovery: 'Recoveries', rally: 'Best rally streak', pattern: 'Patterns' }[plan.score] : drill.goalLabel
-    byId('practice-heading').textContent = plan ? `NTRP ${plan.level} · ${plan.paceLabel}` : 'Practice session'
+    byId('practice-heading').textContent = game.match ? 'Match court' : plan ? `NTRP ${plan.level} · ${plan.paceLabel}` : 'Practice session'
     byId('drill-title').textContent = plan?.title ?? drill.title
     byId('drill-description').textContent = plan?.objective ?? drill.description
     byId('score-label').textContent = goalLabel
@@ -369,7 +460,14 @@ function updateTraining() {
     byId('return-ntrp').querySelector('span')!.textContent = plan ? 'Back to Skill Path' : 'NTRP Skill Path'
     byId('score-goal').textContent = `/ ${game.goal}`
     byId('score-segments').innerHTML = '<i aria-hidden="true"></i>'.repeat(game.goal)
-    byId('serve-settings').hidden = !serve
+    byId('serve-settings').hidden = !serve || !!game.match
+    byId('opponent-settings').hidden = !game.match
+    byId('drill-score').hidden = !!game.match
+    byId('training-panel').classList.toggle('match-court', !!game.match)
+    document.querySelector<HTMLAnchorElement>('[data-nav="training"]')!.href = game.match ? '#match' : '#training'
+    setText('open-report', game.match ? 'Scorecard & shot chart' : 'Session review')
+    byId('reset-drill').setAttribute('aria-label', game.match ? 'Reset match' : 'Reset drill')
+    byId('reset-drill').title = game.match ? 'Reset match' : 'Reset drill'
   }
 
   const configuration = [id, game.shot, game.adSide, display.guides].join()
@@ -381,7 +479,7 @@ function updateTraining() {
       ? 'Aim at the highlighted zone' : game.drill === 'footwork' ? 'Use the recovery ring' : 'Choose an aim point across the net'
   }
 
-  if (!plan && game.progress > Math.max(0, Number(best[game.drill]) || 0)) {
+  if (!game.match && !plan && game.progress > Math.max(0, Number(best[game.drill]) || 0)) {
     best[game.drill] = game.progress
     savePreferences()
   }
@@ -400,17 +498,27 @@ function updateTraining() {
     byId('best').textContent = `Best ${currentBest} / ${game.goal}`
   }
 
-  const action = !game.active
+  updateBoard()
+  const courtWind = replay ? sampleReplay(replay.clip, replay.time).conditions.wind : game.courtConditions.wind
+  byId('court-wind').hidden = !courtWind
+  if (courtWind) setText('court-wind', (courtWind > 0 ? 'Wind → ' : 'Wind ← ') + Math.abs(courtWind).toFixed(1) + ' m/s')
+  const action = game.match ? !game.active ? game.phase === 'finished' ? 'Rematch' : 'Start Match' : game.paused ? 'Resume Match' : 'Pause Match' : !game.active
     ? game.phase === 'finished' ? 'Restart Drill' : 'Start Drill'
     : game.paused ? 'Resume Drill' : 'Pause Drill'
   if (actionKey !== action) {
     actionKey = action
     const content = `${icon(game.active && !game.paused ? 'pause' : 'play', 19)} <span>${action}</span>`
     byId('start-drill').innerHTML = content
+    byId('quiet-play').innerHTML = icon(game.active && !game.paused ? 'pause' : 'play', 15)
+    byId('quiet-play').setAttribute('aria-label', action.replace(/Drill|Match/g, 'practice'))
   }
   const finished = game.phase === 'finished'
   const success = finished && game.progress >= game.goal
-  const cue = finished ? {
+  const cue = finished && game.match ? {
+    title: game.match.you > game.match.rival ? 'Tiebreak won' : 'Tiebreak lost',
+    detail: game.match.you + ' – ' + game.match.rival + ' · Match record ' + matchesWon + ' W / ' + (matchesPlayed - matchesWon) + ' L',
+    tone: game.match.you > game.match.rival ? 'good' : 'neutral',
+  } : finished ? {
     title: success ? 'Drill complete' : 'Session complete',
     detail: success ? `${game.goal} / ${game.goal} · Goal reached` : `${game.progress} / ${game.goal} · Restart for another set`,
     tone: success ? 'good' : 'neutral',
@@ -506,8 +614,10 @@ function chartConditions() {
 
 function route() {
   const hash = location.hash.slice(1)
-  if (hash !== '' && hash !== 'training' && hash !== 'ntrp' && hash !== 'technique' && hash !== 'guide') return
-  const next: Page = hash || 'training'
+  if (hash !== '' && hash !== 'match' && hash !== 'training' && hash !== 'ntrp' && hash !== 'technique' && hash !== 'guide') return
+  if (hash === 'match' && !game.match) { closeReplay(); game.select('match') }
+  if (hash !== 'match' && (hash === '' || hash === 'training') && game.match) { closeReplay(); game.select('forehand') }
+  const next: Page = hash === 'match' ? 'training' : hash || 'training'
   if (next !== page) {
     if (replay) closeReplay()
     closeDrawers()
@@ -555,6 +665,7 @@ function selectDrill(drill: DrillId) {
   if (!game.plan && game.drill === drill) return
   if (replay) closeReplay()
   game.select(drill)
+  if (page === 'training' && (drill === 'match' || location.hash === '#match')) location.hash = drill === 'match' ? 'match' : 'training'
   closeDrawers()
   updateTraining()
   dirty = true
@@ -605,12 +716,22 @@ function openHelp() {
 
 byId('show-help').onclick = openHelp
 byId('start-drill').onclick = toggleDrill
+byId('quiet-play').onclick = toggleDrill
 byId('study-drill').onclick = () => {
-  lab.technique = game.plan ? planMotion(game.plan) : game.drill === 'rally' ? 'backhand' : game.drill
+  lab.technique = game.plan ? planMotion(game.plan) : game.match ? game.serving ? 'serve' : 'forehand' : game.drill === 'rally' || game.drill === 'match' ? 'backhand' : game.drill
   setLabPhase(0)
 }
 function resetDrill() { closeReplay(); game.reset(); updateTraining(); dirty = true }
 byId('reset-drill').onclick = resetDrill
+for (const id of ['open-report', 'board-details', 'finish-review']) byId(id).onclick = openReport
+byId<HTMLSelectElement>('match-pace').onchange = event => {
+  const pace = (event.currentTarget as HTMLSelectElement).value as Pace
+  if (game.active || !Object.hasOwn(OPPONENTS, pace)) return
+  game.pace = pace
+  if (game.match && game.phase === 'idle') game.match.pace = pace
+  savePreferences()
+  dirty = true
+}
 all<HTMLButtonElement>('[data-drill]').forEach(button => button.onclick = () => {
   selectDrill(button.dataset.drill as DrillId)
 })
@@ -752,7 +873,7 @@ byId<HTMLInputElement>('vectors-toggle').onchange = event => {
   display.vectors = (event.currentTarget as HTMLInputElement).checked
   dirty = true
 }
-byId('review-open').onclick = openReplay
+byId('review-open').onclick = () => openReplay()
 byId('review-close').onclick = () => { closeReplay(); focusCourt() }
 byId('review-play').onclick = toggleReplay
 byId<HTMLInputElement>('review-scrub').oninput = event => {
@@ -809,7 +930,8 @@ all('.world-labels').forEach(host => host.onclick = event => {
       byId('feedback').textContent = 'Aim set to the center of the target.'
       dirty = true
       focusCourt()
-    } else if (marker === 'partner' || marker === 'recovery' || marker === 'net-player') {
+    } else if (marker === 'landing') openReport()
+    else if (marker === 'partner' || marker === 'recovery' || marker === 'stance' || marker === 'net-player') {
       openDrawer('session', byId('training-panel'))
       byId('feedback').textContent = game.plan?.cue ?? DRILLS[game.drill].coach
     } else {
@@ -860,6 +982,7 @@ const movementKeys = new Set(Object.values(movement).flat())
 const aimKeys = new Set(['KeyQ', 'KeyE', 'KeyR', 'KeyF'])
 
 window.addEventListener('keydown', event => {
+  if (report.dialog.open) return
   if (event.key === 'Escape') {
     closeDrawers()
     if (replay) closeReplay()

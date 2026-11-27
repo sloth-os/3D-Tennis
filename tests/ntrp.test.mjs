@@ -41,8 +41,9 @@ function moveToward(player, target) {
   return { x: clamp((target.x - player.x) * 3.6, -1, 1), z: clamp((target.z - player.z) * 3.6, -1, 1) }
 }
 
-function completeDrill(plan) {
+function completeDrill(plan, surface = 'hard') {
   const game = new Game()
+  game.setConditions({ surface, wind: 0 })
   game.selectPlan(plan)
   game.begin()
   let forecast
@@ -71,9 +72,11 @@ test('all eight NTRP levels cover six skill areas with unique, playable drill pl
         const plan = ntrpPlan(level, skill, exercise)
         assert.ok(!known.has(plan.id), plan.id)
         known.add(plan.id)
-        const game = completeDrill(plan)
-        assert.equal(game.phase, 'finished', plan.id)
-        assert.equal(game.progress, game.goal, `${plan.id} · ${game.result.title}`)
+        for (const surface of ['hard', 'clay', 'grass']) {
+          const game = completeDrill(plan, surface)
+          assert.equal(game.phase, 'finished', plan.id)
+          assert.equal(game.progress, game.goal, `${plan.id} · ${surface} · ${game.result.title}`)
+        }
       }
     }
   }

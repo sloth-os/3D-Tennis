@@ -146,7 +146,7 @@ export function practiceFeed(plan: NtrpPlan, attempt: number, server: Aim, wind:
   let bounceZ = home.z - (tier < 3 ? 1.24 : 1.84) - (tier >= 6 ? (attempt % 3) * .21 : 0)
   let spin = tier < 2 ? 280 : 580 + tier * 85
   let duration = [1.50, 1.47, 1.43, 1.40, 1.33, 1.27, 1.19, 1.10][tier]
-  const origin = returnFrom ? { x: returnFrom.x, y: Math.max(.72, returnFrom.y), z: Math.min(returnFrom.z, -4.3) }
+  const origin = returnFrom ? { ...returnFrom }
     : { x: server.x + .42, y: tier < 2 ? 1.16 : 1.44, z: server.z + .35 }
 
   if (exercise === 'return' || exercise === 'pressureReturn') {

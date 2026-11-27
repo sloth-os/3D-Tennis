@@ -9,6 +9,7 @@ const notices = await Promise.all(bundledPackages.map(async name => {
   const license = await readFile(new URL(`../node_modules/${name}/LICENSE`, import.meta.url), 'utf8')
   return `${name}\n\n${license.trim()}`
 }))
+notices.push('Park photography and grass texture · CC0 1.0\nEvening Meadow, Alexander Scholten · https://polyhaven.com/a/evening_meadow\nGrass Ground, Charlotte Baglioni · https://polyhaven.com/a/grass_ground\nhttps://polyhaven.com/license')
 await writeFile(path.join(dist, 'THIRD-PARTY-NOTICES.txt'), notices.join('\n\n'))
 
 const artifacts = (await readdir(dist, { recursive: true, withFileTypes: true }))

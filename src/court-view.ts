@@ -9,10 +9,12 @@ import { activeMuscle, add, analyzeMotion, mix, samplePose, vec, MOTION_DURATION
 import type { ReplayFrame } from './replay.ts'
 import { WorldAnalysis, type BodyState, type WorldLabel } from './world-analysis.ts'
 import type { ForceMode } from './analysis-colors.ts'
+import { lineDistance } from './point-play.ts'
 
 export type GameView = { camera: CameraMode; orbit: Orbit; trail: boolean; guides: boolean; vectors: boolean; mode: ForceMode;
   preview?: Ball; replay?: ReplayFrame; reviewTrail?: Vec3[]; contact: Contact | null; playing: boolean; leanMotion: boolean;
-  demo?: { ball: Ball; time: number; trail: Vec3[] } }
+  demo?: { ball: Ball; time: number; trail: Vec3[] }; replayScore?: { you: number; rival: number };
+  netMotion?: { contact: Contact; age: number } | null }
 export type LabView = { technique: Technique; time: number; joints: boolean; anatomy: boolean; vectors: boolean;
   focus: MuscleGroup; angle: LabAngle; orbit: Orbit; playing: boolean; leanMotion: boolean; conditions: Conditions }
 
@@ -136,15 +138,19 @@ class LiveCourt {
   private readonly aim = mark(NEON, .44)
   private readonly recovery = mark(0x95e0ee, .85, .78)
   private readonly landing = mark(0xfbf6c6, .25, .77)
+  private readonly bounceGuide = mark(0xffc58c, .20, .86)
+  private readonly feetGuide = new THREE.Group()
+  private readonly contactGate = new THREE.Mesh(new THREE.RingGeometry(.147, .159, 32), guideMaterial(0xe7f7c4, .77))
   private readonly target = buildTarget()
   private readonly trail = buildTrail(false)
   private readonly projected = buildTrail(true)
-  private readonly setSurface: ReturnType<typeof buildVenue>
+  private readonly venue: ReturnType<typeof buildVenue>
+  private readonly lanes = buildTrail(true)
+  private sceneTime = 0
   private currentSurface = ''
   private currentForecast: Vec3[] | null = null
   private idleKey = ''
   private cameraKey = ''
-  private run = 0
   private aspect = 1
   private width = 0
   private height = 0
@@ -152,7 +158,7 @@ class LiveCourt {
   private readonly nativePixelRatio = Math.min(window.devicePixelRatio || 1, 1.65)
   private lowResolution = false
 
-  constructor(readonly canvas: HTMLCanvasElement) {
+  constructor(readonly canvas: HTMLCanvasElement, onReady: () => void) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false, powerPreference: 'high-performance' })
     const gl = this.renderer.getContext()
     const info = gl.getExtension('WEBGL_debug_renderer_info')
@@ -165,7 +171,24 @@ class LiveCourt {
     this.renderer.shadowMap.type = this.softwareRenderer ? THREE.BasicShadowMap : THREE.PCFShadowMap
     this.renderer.shadowMap.autoUpdate = false
     this.renderer.shadowMap.needsUpdate = true
-    this.setSurface = buildVenue(this.scene)
+    this.venue = buildVenue(this.scene, onReady)
+    const shoeMark = new THREE.Shape()
+    shoeMark.moveTo(-.046, -.14)
+    shoeMark.bezierCurveTo(-.091, -.13, -.088, .14, -.049, .18)
+    shoeMark.bezierCurveTo(.006, .22, .083, .17, .077, .04)
+    shoeMark.bezierCurveTo(.064, -.04, .066, -.17, -.046, -.14)
+    const imprint = new THREE.ShapeGeometry(shoeMark)
+    for (const sign of [-1, 1]) {
+      const shoe = new THREE.Mesh(imprint, guideMaterial(0x9be2ef, .80))
+      shoe.rotation.set(-Math.PI / 2, 0, sign * .14)
+      shoe.position.x = sign * .24
+      this.feetGuide.add(shoe)
+    }
+    this.feetGuide.add(ring(.47, .014, guideMaterial(0x9be2ef, .48)))
+    this.scene.add(this.bounceGuide, this.feetGuide, this.contactGate)
+    this.lanes.material = new THREE.LineDashedMaterial({ color: 0x9ce3f0, transparent: true, opacity: .56, dashSize: .22, gapSize: .20 })
+    this.lanes.visible = false
+    this.scene.add(this.lanes)
     this.player = new Athlete(this.scene)
     this.opponent = new Athlete(this.scene, true)
     this.demonstrator = new Athlete(this.scene)
@@ -173,12 +196,16 @@ class LiveCourt {
     this.demonstrator.root.position.set(-.4, .012, 6.8)
     this.opponent.root.rotation.y = Math.PI
 
-    this.ball = new THREE.Mesh(new THREE.SphereGeometry(.068, 16, 11), new THREE.MeshStandardMaterial({
-      color: 0xe1fb37, emissive: 0x819826, emissiveIntensity: .38, roughness: .82,
+    this.ball = new THREE.Mesh(new THREE.SphereGeometry(COURT.ballRadius, 24, 16), new THREE.MeshStandardMaterial({
+      color: 0xd9f43a, emissive: 0x728518, emissiveIntensity: .32, roughness: .98,
     }))
-    const seam = new THREE.Mesh(new THREE.TorusGeometry(.063, .0028, 5, 26), new THREE.MeshBasicMaterial({ color: 0xe6e8ad }))
-    seam.rotation.x = .58
-    seam.rotation.y = .29
+    const stitching = Array.from({ length: 97 }, (_, i) => {
+      const t = i / 96 * Math.PI * 2
+      const latitude = .71 * Math.sin(2 * t)
+      return new THREE.Vector3(Math.cos(t) * Math.cos(latitude), Math.sin(latitude), Math.sin(t) * Math.cos(latitude)).multiplyScalar(COURT.ballRadius)
+    })
+    const seam = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(stitching), 80, .00095, 5, true),
+      new THREE.MeshBasicMaterial({ color: 0xf3efd7 }))
     this.ball.add(seam)
     const shadowMap = canvasTexture(64, 64, ctx => {
       const gradient = ctx.createRadialGradient(32, 32, 2, 32, 32, 31)
@@ -229,8 +256,15 @@ class LiveCourt {
     this.viewLook.set(0, .46, -1.25)
     switch (key) {
       case 'baseline':
-        this.viewFrom.set(narrow ? 3.6 : 6.55, narrow ? 10.55 : 9.72, narrow ? 24.1 : 23.75)
-        this.viewLook.set(-.21, .51, narrow ? -.3 : .48)
+        if (this.aspect < .86) {
+          this.viewFrom.set(.65, 9.5, 28.8 + Math.max(0, .52 / this.aspect - 1) * 17)
+          this.viewLook.set(0, .22, 4.05)
+          fov = 58
+        } else {
+          this.viewFrom.set(3.1, 6.4, 23.65)
+          this.viewLook.set(0, .55, 4.30)
+          fov = narrow ? 51 : 45
+        }
         break
       case 'player':
         this.viewFrom.set((player?.x ?? 0) + .77, 2.48, (player?.z ?? 11) + 2.85)
@@ -304,30 +338,33 @@ class LiveCourt {
     this.renderAtSpeed(display.playing)
     const sample = display.replay
     const player = sample?.player ?? game.player
-    const ball = sample?.ball ?? display.demo?.ball ?? game.ball
-    const conditions = sample?.conditions ?? game.conditions
+    const ball = sample?.ball ?? display.demo?.ball ?? game.ball ?? game.opponentToss
+    const conditions = sample?.conditions ?? game.courtConditions
+    const end = sample?.end ?? game.match?.end ?? 0
+    this.setEnd(end)
+    if (display.playing) this.sceneTime += dt
+    this.venue.flag(conditions.wind * (end ? -1 : 1), sample?.time ?? this.sceneTime)
+    this.venue.flex(sample ? display.netMotion : game.netMotion, end)
+    this.venue.board(display.replayScore ?? game.match ?? undefined)
     this.placeCamera(display.camera, display.orbit, dt, display.leanMotion, player, ball ?? undefined)
     this.demonstrator.root.visible = false
     this.player.root.visible = true
     this.opponent.root.visible = game.drill !== 'serve'
     if (conditions.surface !== this.currentSurface) {
       this.currentSurface = conditions.surface
-      this.setSurface(conditions.surface)
+      this.venue.surface(conditions.surface)
     }
     this.world.clear()
     this.swingPath.visible = false
     const labels: WorldLabel[] = []
-    const moving = !sample && display.playing
-    if (moving) this.run += Math.hypot(game.playerMotion.x, game.playerMotion.z) * dt * 3.2
+    const feet = sample?.feet ?? { velocity: game.playerMotion, stride: game.playerStride, split: game.splitClock }
     const { technique, progress } = display.demo
       ? { technique: game.posture.technique, progress: clamp(.62 + display.demo.time * .76, .62, 1) }
       : sample?.pose ?? game.posture
-    const dip = moving && game.splitClock < .33 ? Math.sin(game.splitClock / .33 * Math.PI) * .11 : 0
     const onStrings = sample ? progress >= .62 && progress <= .66 : game.swingClock < .075
     const contact = onStrings && display.contact?.kind === 'racket' ? display.contact.position : null
     const pose = samplePose(technique, progress, {
-      movement: moving ? game.playerMotion.x / 6.5 : 0, depth: moving ? game.playerMotion.z / 6.5 : 0,
-      run: this.run, dip,
+      movement: feet.velocity.x / 6.5, depth: feet.velocity.z / 6.5, run: feet.stride, split: feet.split,
       racketTarget: contact ? vec(contact.x - player.x, contact.y - .014, contact.z - player.z) : undefined,
     })
     this.player.root.position.set(player.x, .014, player.z)
@@ -335,8 +372,19 @@ class LiveCourt {
     const emphasis = activeMuscle(technique, progress)
     this.player.guide.visible = bodyView
     this.player.applyPose(pose, bodyView ? { focus: emphasis, emphasis } : undefined)
-    this.opponent.root.position.set(game.opponent.x, .012, game.opponent.z)
-    this.opponent.pose('forehand', game.opponentSwing < .52 ? .62 + game.opponentSwing * .71 : .02)
+    const rival = sample?.opponent.position ?? game.opponent
+    const rivalPose = sample?.opponent.pose ?? game.opponentPose
+    const rivalMotion = sample?.opponent.feet.velocity ?? game.opponentMotion
+    this.opponent.root.position.set(rival.x, .012, rival.z)
+    const farContact = !sample && game.opponentSwing < .075 && game.lastContact?.kind === 'racket' ? game.lastContact.position : null
+    this.opponent.applyPose(samplePose(rivalPose.technique, rivalPose.progress, {
+      movement: -rivalMotion.x / 6.5, depth: -rivalMotion.z / 6.5, run: sample?.opponent.feet.stride ?? game.opponentStride,
+      racketTarget: farContact ? vec(rival.x - farContact.x, farContact.y - .012, rival.z - farContact.z) : undefined,
+    }))
+    if (ball) {
+      this.player.trackBall(vec(ball.position.x - player.x, ball.position.y, ball.position.z - player.z))
+      this.opponent.trackBall(vec(rival.x - ball.position.x, ball.position.y, rival.z - ball.position.z))
+    }
     const partner = game.partner
     const netPlayer = game.netOpponent
     if (partner) {
@@ -354,41 +402,57 @@ class LiveCourt {
     }
     if (this.partner) this.partner.root.visible = !!partner
     if (this.netPlayer) this.netPlayer.root.visible = !!netPlayer
-    this.player.guide.visible = false
     this.labShadow.visible = false
     this.playerShadow.visible = true
     this.opponentShadow.visible = this.opponent.root.visible
     this.playerShadow.position.set(player.x + .21, .025, player.z - .10)
-    this.opponentShadow.position.set(game.opponent.x + .21, .025, game.opponent.z - .10)
+    this.opponentShadow.position.set(rival.x + .21, .025, rival.z - .10)
 
     const zone = game.zone
+    const receive = game.receiveMark
+    this.feetGuide.visible = !sample && display.guides && game.phase === 'incoming' && !!receive
+    this.contactGate.visible = this.feetGuide.visible
+    this.bounceGuide.visible = this.feetGuide.visible && !!receive?.bounce
+    if (this.feetGuide.visible && receive) {
+      this.feetGuide.position.set(receive.feet.x, .032, receive.feet.z)
+      this.contactGate.position.set(receive.contact.x, receive.contact.y, receive.contact.z)
+      this.contactGate.quaternion.copy(this.camera.quaternion)
+      if (receive.bounce) this.bounceGuide.position.set(receive.bounce.x, .031, receive.bounce.z)
+      if (Math.hypot(receive.feet.x - player.x, receive.feet.z - player.z) > .82)
+        labels.push({ key: 'stance', text: receive.side + ' setup', position: vec(receive.feet.x, .15, receive.feet.z) })
+    }
     this.target.visible = !sample && display.guides && game.showTarget
     this.target.position.set((zone.xMax + zone.xMin) / 2, .022, (zone.zMax + zone.zMin) / 2)
     this.target.scale.set(zone.xMax - zone.xMin, zone.zMax - zone.zMin, 1)
     this.aim.visible = !sample
     this.aim.position.set(game.aim.x, .027, game.aim.z)
     this.aim.scale.setScalar(display.camera === 'overhead' ? 1.45 : 1)
-    this.recovery.visible = !sample && game.drill === 'footwork' && (display.guides || game.phase === 'recover')
+    const cover = !!game.match && display.guides && (game.phase === 'outgoing' || game.phase === 'opponent')
+    this.recovery.visible = !sample && (cover || game.drill === 'footwork' && (display.guides || game.phase === 'recover'))
     this.recovery.position.set(game.recoverySpot.x, .029, game.recoverySpot.z)
     this.recovery.scale.setScalar(game.plan ? game.recoverySize / .85 : 1)
-    if (game.plan && this.recovery.visible) labels.push({ key: 'recovery', text: 'Recovery ring',
+    this.lanes.visible = !sample && cover && !!game.intercept
+    if (this.lanes.visible) {
+      const hit = game.intercept!.ball
+      fillTrail(this.lanes, [vec(-COURT.singles, .06, COURT.service), vec(hit.x, .06, hit.z), vec(COURT.singles, .06, COURT.service)])
+    }
+    if ((game.plan || cover) && this.recovery.visible) labels.push({ key: 'recovery', text: cover ? 'Cover the angle' : 'Recovery ring',
       position: vec(game.recoverySpot.x - .5, .09, game.recoverySpot.z + .18) })
     this.landing.visible = !sample && !!game.lastLanding && display.guides
     if (game.lastLanding) this.landing.position.set(game.lastLanding.x, .034, game.lastLanding.z)
+    if (this.landing.visible && game.lastLanding && game.lastCall && (game.phase === 'between' || Math.abs(game.lastCall.margin) < .35))
+      labels.push({ key: 'landing', text: (game.lastCall.inside ? 'In' : 'Out') + ' · ' + lineDistance(game.lastCall),
+        position: vec(game.lastLanding.x, .29, game.lastLanding.z) })
     const idle = game.phase === 'idle'
     const activeBall = ball ?? (idle ? display.preview : undefined)
     this.ball.visible = !!activeBall
     this.ballShadow.visible = this.ball.visible
     if (activeBall) {
       const position = activeBall.position
-      this.ball.position.set(position.x, Math.max(position.y, .068), position.z)
-      if (sample) {
-        this.ball.rotation.z = sample.time * activeBall.spin / 120
-        this.ball.rotation.y = sample.time * activeBall.sideSpin / 120
-      } else if (display.playing) {
-        this.ball.rotation.z += dt * activeBall.spin / 120
-        this.ball.rotation.y += dt * activeBall.sideSpin / 120
-      }
+      this.ball.position.set(position.x, position.y, position.z)
+      // Keep a regulation ball in close views and a visible ball at broadcast distance.
+      this.ball.scale.setScalar(clamp(this.camera.position.distanceTo(this.ball.position) / 10, 1, 2.15))
+      this.ball.rotation.set(activeBall.rotation.x, activeBall.rotation.y, activeBall.rotation.z)
       this.ballShadow.position.set(position.x, .026, position.z)
       this.ballShadow.scale.setScalar(1 + position.y * .39)
     }
@@ -418,7 +482,7 @@ class LiveCourt {
       if (display.mode === 'flight' && activeBall) this.world.flight(activeBall.position, flightForces(activeBall, conditions.wind), !idle, labels)
       if (display.mode === 'contact' && display.contact) {
         const hit = display.contact
-        const name = hit.kind === 'court' ? 'Court bounce' : hit.kind === 'racket' ? 'Racket contact' : 'Net impact'
+        const name = hit.kind === 'court' ? 'Court bounce' : hit.kind === 'racket' ? 'Racket contact' : hit.kind === 'tape' ? 'Net cord' : 'Net impact'
         this.world.impact(hit.position, hit.before, hit.after, analyzeContact(hit).force, name, sample ? .18 : game.phaseTime, labels)
       }
       if (body) {
@@ -437,10 +501,15 @@ class LiveCourt {
     this.placeCamera(`lab-${display.angle}`, display.orbit, dt, display.leanMotion, undefined, undefined,
       display.technique === 'serve' || display.technique === 'overhead')
     this.demonstrator.root.visible = true
+    this.setEnd(0)
+    this.venue.board()
+    this.venue.flex(null, 0)
+    this.venue.flag(display.conditions.wind, display.time * MOTION_DURATION[display.technique])
+    this.lanes.visible = false
     const subject = this.demonstrator.root.position
     if (display.conditions.surface !== this.currentSurface) {
       this.currentSurface = display.conditions.surface
-      this.setSurface(display.conditions.surface)
+      this.venue.surface(display.conditions.surface)
     }
     const origin = vec(subject.x, subject.y, subject.z)
     const pose = samplePose(display.technique, display.time)
@@ -455,6 +524,7 @@ class LiveCourt {
     this.labShadow.visible = true
     this.labShadow.position.set(subject.x + pose.hips.x + .21, .025, subject.z - .10)
     this.target.visible = this.aim.visible = this.recovery.visible = this.landing.visible = false
+    this.feetGuide.visible = this.bounceGuide.visible = this.contactGate.visible = false
     this.trail.visible = this.projected.visible = this.ballShadow.visible = false
     const labels: WorldLabel[] = []
     this.world.clear()
@@ -504,10 +574,19 @@ class LiveCourt {
         const seconds = (display.time - hitTime) * MOTION_DURATION[display.technique]
         position = this.labFlight[Math.min(this.labFlight.length - 1, Math.round(seconds * 40))] ?? contact
       }
-      this.ball.position.set(position.x, Math.max(.068, position.y), position.z)
+      this.ball.scale.setScalar(1)
+      this.ball.position.set(position.x, position.y, position.z)
+      this.ball.rotation.x = (display.time - hitTime) * MOTION_DURATION[display.technique] * (volley || serve ? 35 : 180)
+      this.demonstrator.trackBall(vec(position.x - origin.x, position.y, position.z - origin.z))
     }
     this.world.project(labels, this.camera, this.width, this.height)
     this.renderer.render(this.scene, this.camera)
+  }
+
+  private setEnd(end: number) {
+    if (this.venue.venue.rotation.y === end * Math.PI) return
+    this.venue.venue.rotation.y = end * Math.PI
+    this.renderer.shadowMap.needsUpdate = true
   }
 
   aimAt(x: number, y: number): Aim | null {
@@ -557,7 +636,7 @@ class TacticalCourt {
     box(-COURT.singles, -COURT.service, COURT.singles, COURT.service * 2)
     box(0, -COURT.service, COURT.singles, COURT.service * 2)
     box(-COURT.postX, -.063, COURT.postX * 2, .126, '#e2e7d8')
-    if (display.guides && game.showTarget) {
+    if (!display.replay && display.guides && game.showTarget) {
       const { xMin, xMax, zMin, zMax } = game.zone
       box(xMin, zMin, xMax - xMin, zMax - zMin, '#dfff5544')
       ctx.strokeStyle = '#dfff55'
@@ -581,16 +660,23 @@ class TacticalCourt {
       if (outline) ctx.stroke()
       else ctx.fill()
     }
-    dot(game.aim.x, game.aim.z, 8, '#dcf971', true)
+    if (!display.replay) dot(game.aim.x, game.aim.z, 8, '#dcf971', true)
     const player = display.replay?.player ?? game.player
+    if (display.guides && !display.replay && game.phase === 'incoming' && game.receiveMark) {
+      const { feet, bounce } = game.receiveMark
+      dot(feet.x, feet.z, 9, '#9be2ef', true)
+      if (bounce) dot(bounce.x, bounce.z, 4, '#ffc58c', true)
+    }
     dot(player.x, player.z, 7, '#eef3df')
-    if (game.drill !== 'serve') dot(game.opponent.x, game.opponent.z, 6, '#dfb679')
-    if (game.drill === 'footwork') dot(game.recoverySpot.x, game.recoverySpot.z, 13, '#8ad4ea', true)
+    const rival = display.replay?.opponent.position ?? game.opponent
+    if (game.drill !== 'serve') dot(rival.x, rival.z, 6, '#dfb679')
+    if (!display.replay && (game.drill === 'footwork' || game.match && display.guides && (game.phase === 'outgoing' || game.phase === 'opponent')))
+      dot(game.recoverySpot.x, game.recoverySpot.z, 13, '#8ad4ea', true)
     const partner = game.partner
     const netPlayer = game.netOpponent
     if (partner) dot(partner.x, partner.z, 7, '#8ad4ea')
     if (netPlayer) dot(netPlayer.x, netPlayer.z, 7, '#dfb679')
-    const ball = display.replay?.ball ?? display.demo?.ball ?? game.ball ?? display.preview
+    const ball = display.replay?.ball ?? display.demo?.ball ?? game.ball ?? game.opponentToss ?? display.preview
     if (ball) dot(ball.position.x, ball.position.z, 3.8, '#e4ff4d')
   }
 
@@ -622,7 +708,7 @@ export class CourtView {
   constructor(host: HTMLElement, onResize: () => void) {
     let canvas = document.createElement('canvas')
     try {
-      this.view = new LiveCourt(canvas)
+      this.view = new LiveCourt(canvas, onResize)
       this.fallback = false
     } catch (error) {
       console.warn('WebGL court unavailable. Using the tactical view.', error)

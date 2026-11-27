@@ -1,6 +1,9 @@
 import * as THREE from 'three'
 import { COURT, SURFACES, type Surface } from './config.ts'
-import { netHeight } from './physics.ts'
+import { netHeight, type Contact } from './physics.ts'
+import { GroundedSkybox } from 'three/addons/objects/GroundedSkybox.js'
+import parkURL from './assets/northwood-park.webp'
+import grassURL from './assets/grass-ground.webp'
 
 function seeded(seed: number) {
   let state = seed >>> 0
@@ -45,41 +48,36 @@ const n = seeded(8731)
 const range = (min: number, max: number) => min + n() * (max - min)
 const pose = new THREE.Object3D()
 
-function createSky(scene: THREE.Scene) {
-  scene.background = new THREE.Color(0xc6a59e)
-  scene.fog = new THREE.Fog(0x9c9eab, 32, 117)
-  const material = new THREE.ShaderMaterial({
-    uniforms: {
-      low: { value: new THREE.Color(0xcdaa9f) },
-      high: { value: new THREE.Color(0x57769c) },
-      glow: { value: new THREE.Color(0xffcc8f) },
-    },
-    vertexShader: `
-      varying vec3 vDirection;
-      void main() {
-        vDirection = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      varying vec3 vDirection;
-      uniform vec3 low;
-      uniform vec3 high;
-      uniform vec3 glow;
-      void main() {
-        vec3 v = normalize(vDirection);
-        vec3 c = mix(low, high, smoothstep(-0.035, 0.39, v.y));
-        float sun = pow(max(dot(v, normalize(vec3(-0.63, 0.13, -0.8))), 0.0), 23.0);
-        float clouds = sin(v.x * 22.0 + sin(v.z * 17.0) * 1.8 + v.y * 83.0);
-        float haze = smoothstep(0.45, 0.85, clouds) * smoothstep(0.012, 0.07, v.y) * (1.0 - smoothstep(0.09, 0.25, v.y));
-        gl_FragColor = vec4(mix(c, glow, sun * 0.68 + haze * 0.07), 1.0);
-        #include <tonemapping_fragment>
-        #include <colorspace_fragment>
-      }`,
-    side: THREE.BackSide, depthWrite: false, fog: false,
-  })
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(138, 30, 16), material)
-  sky.renderOrder = -100
-  scene.add(sky)
+function createPark(scene: THREE.Group, onReady: () => void) {
+  const panorama = new THREE.TextureLoader().load(parkURL, onReady)
+  panorama.colorSpace = THREE.SRGBColorSpace
+  panorama.anisotropy = 4
+  const dome = new GroundedSkybox(panorama, 4.6, 96, 48)
+  dome.position.y = 4.49
+  dome.rotation.y = 1.82
+  dome.material.toneMapped = false
+  dome.material.fog = false
+  dome.renderOrder = -100
+  scene.add(dome)
+  const grass = new THREE.TextureLoader().load(grassURL, onReady)
+  grass.colorSpace = THREE.SRGBColorSpace
+  grass.wrapS = grass.wrapT = THREE.RepeatWrapping
+  grass.repeat.set(29, 37)
+  grass.anisotropy = 8
+  const lawn = new THREE.PlaneGeometry(66, 85, 16, 18)
+  const positions = lawn.getAttribute('position')
+  const colors: number[] = []
+  for (let i = 0; i < positions.count; i++) {
+    const edge = Math.min(33 - Math.abs(positions.getX(i)), 42.5 - Math.abs(positions.getY(i)))
+    colors.push(1, 1, 1, Math.min(1, edge / 8))
+  }
+  lawn.setAttribute('color', new THREE.Float32BufferAttribute(colors, 4))
+  const verge = new THREE.Mesh(lawn, coat(0xd6dfa6, { map: grass, vertexColors: true, transparent: true, depthWrite: false }))
+  verge.position.y = -.092
+  verge.rotation.x = -Math.PI / 2
+  verge.renderOrder = -1
+  verge.receiveShadow = true
+  scene.add(verge)
 }
 
 function noiseTexture(x: number, y: number) {
@@ -101,9 +99,8 @@ function noiseTexture(x: number, y: number) {
   return texture
 }
 
-function createGround(scene: THREE.Scene) {
+function createGround(scene: THREE.Group) {
   const gravel = coat(0x62705c, { map: noiseTexture(13, 24) })
-  scene.add(floor(240, 240, coat(0x4c694b, { map: noiseTexture(45, 45) }), 0, -10, -.09))
   scene.add(floor(21.8, 41.9, gravel, 0, -.35, -.067))
   scene.add(floor(2.8, 48, coat(0x7f806a, { map: noiseTexture(3, 20) }), 10.3, -4, -.066))
   scene.add(floor(30, 2.8, gravel, 0, -20.9, -.065))
@@ -111,18 +108,32 @@ function createGround(scene: THREE.Scene) {
   scene.add(volume(17.55, .117, 37.8, edge, 0, -.07, 0))
   const apron = coat(SURFACES.hard.apron, { map: noiseTexture(12, 24) })
   const grit = noiseTexture(8, 18)
-  const turf = canvasTexture(128, 512, ctx => {
+  const turf = canvasTexture(256, 768, ctx => {
     const random = seeded(177)
-    const data = ctx.createImageData(128, 512)
-    for (let y = 0; y < 512; y += 1) {
-      const stripe = Math.floor(y / 32) % 2
-      for (let x = 0; x < 128; x += 1) {
-        const intensity = 217 + stripe * 12 + Math.round(random() * 22)
-        const offset = (y * 128 + x) * 4
-        data.data.set([intensity, intensity, intensity, 255], offset)
+    const data = ctx.createImageData(256, 768)
+    for (let y = 0; y < 768; y += 1) {
+      const stripe = Math.floor(y / 48) % 2
+      for (let x = 0; x < 256; x += 1) {
+        const intensity = 213 + stripe * 17 + Math.round(random() * 23)
+        const wear = Math.exp(-(((x - 128) / 70) ** 2 + (Math.min(y, 767 - y) / 19) ** 2)) * (.43 + .52 * random())
+        const offset = (y * 256 + x) * 4
+        data.data.set([Math.min(255, intensity + 43 * wear), intensity - 40 * wear, intensity - 91 * wear, 255], offset)
       }
     }
     ctx.putImageData(data, 0, 0)
+  })
+  const clay = canvasTexture(384, 1024, ctx => {
+    const random = seeded(575)
+    ctx.fillStyle = '#eee4dc'; ctx.fillRect(0, 0, 384, 1024)
+    for (let i = 0; i < 16000; i++) {
+      ctx.fillStyle = i % 3 ? '#75493216' : '#fff7d842'
+      ctx.fillRect(random() * 384, random() * 1024, 1 + random() * 2, .8)
+    }
+    for (let i = 0; i < 105; i++) {
+      const y = random() * 1024, x = random() * 384
+      ctx.strokeStyle = i % 3 ? '#7d51370e' : '#fff6df48'; ctx.lineWidth = .7 + random()
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + 12, y - 1, x + 23 + random() * 15, y + 2); ctx.stroke()
+    }
   })
   const paint = coat(SURFACES.hard.paint, { map: grit })
   const alley = coat(SURFACES.hard.paint, { map: grit })
@@ -142,13 +153,13 @@ function createGround(scene: THREE.Scene) {
   scene.add(floor(w, COURT.service * 2, line, 0, 0, .012))
   return (surface: Surface) => {
     paint.color.setHex(SURFACES[surface].paint)
-    paint.map = alley.map = surface === 'grass' ? turf : grit
+    paint.map = alley.map = surface === 'grass' ? turf : surface === 'clay' ? clay : grit
     alley.color.copy(paint.color).multiplyScalar(.88)
     apron.color.setHex(SURFACES[surface].apron)
   }
 }
 
-function createNet(scene: THREE.Scene) {
+function createNet(scene: THREE.Group) {
   const netTexture = canvasTexture(1024, 96, ctx => {
     ctx.strokeStyle = '#162d2a'
     ctx.lineWidth = 2
@@ -157,14 +168,12 @@ function createNet(scene: THREE.Scene) {
     for (let y = 1; y < 96; y += 6) { ctx.moveTo(0, y); ctx.lineTo(1024, y) }
     ctx.stroke()
   })
-  const vertices: number[] = []
   const uv: number[] = []
   const indices: number[] = []
   const tape: number[] = []
   for (let i = 0; i <= 64; i += 1) {
     const x = (i / 64 * 2 - 1) * COURT.postX
     const height = netHeight(x)
-    vertices.push(x, .02, 0, x, height, 0)
     tape.push(x, height - .061, -.013, x, height + .006, -.013)
     uv.push(i / 64, 0, i / 64, 1)
     if (i > 0) indices.push(i * 2 - 2, i * 2, i * 2 - 1, i * 2, i * 2 + 1, i * 2 - 1)
@@ -177,7 +186,10 @@ function createNet(scene: THREE.Scene) {
     geometry.computeVertexNormals()
     return geometry
   }
-  const mesh = new THREE.Mesh(sheet(vertices), new THREE.MeshBasicMaterial({
+  const netting = new THREE.PlaneGeometry(COURT.postX * 2, 1, 64, 8)
+  const knots = netting.getAttribute('position')
+  for (let i = 0; i < knots.count; i++) knots.setY(i, .02 + (knots.getY(i) + .5) * (netHeight(knots.getX(i)) - .02))
+  const mesh = new THREE.Mesh(netting, new THREE.MeshBasicMaterial({
     map: netTexture, side: THREE.DoubleSide, alphaTest: .32, transparent: true, opacity: .84,
   }))
   mesh.renderOrder = 2
@@ -197,9 +209,35 @@ function createNet(scene: THREE.Scene) {
     scene.add(volume(.036, COURT.netPost, .039, posts, sign * COURT.stickX, COURT.netPost / 2, .019))
   }
   scene.add(volume(.047, .914, .029, coat(0xe2e2ce), 0, .457, .003))
+  const parts = [mesh, edge, thread].map(part => {
+    const positions = part.geometry.getAttribute('position')
+    return { positions, rest: positions.clone() }
+  })
+  let flexed = false
+  return (strike: { contact: Contact; age: number } | null | undefined, end: number) => {
+    const active = !!strike && strike.age >= 0 && strike.age < .57
+    if (!active && !flexed) return
+    flexed = active
+    const direction = end ? -1 : 1
+    for (const { positions, rest } of parts) {
+      for (let i = 0; i < rest.count; i++) {
+        let bend = 0
+        if (active && strike) {
+          const dx = rest.getX(i) - strike.contact.position.x * direction
+          const dy = rest.getY(i) - strike.contact.position.y
+          const t = Math.max(0, strike.age - Math.abs(dx) / 17)
+          const kick = Math.min(.37, Math.abs(strike.contact.before.z) / 55)
+          bend = Math.sin(39 * t) * Math.exp(-t * 9 - dx * dx * 1.2 - dy * dy * 3)
+            * kick * Math.sign(strike.contact.before.z) * direction
+        }
+        positions.setZ(i, rest.getZ(i) + bend)
+      }
+      positions.needsUpdate = true
+    }
+  }
 }
 
-function createFence(scene: THREE.Scene) {
+function createFence(scene: THREE.Group) {
   const pipe = coat(0x394f45, { metalness: .42 })
   const panel = canvasTexture(128, 128, ctx => {
     ctx.strokeStyle = '#294638'
@@ -223,6 +261,25 @@ function createFence(scene: THREE.Scene) {
   }
   const farEnd = -18.05
   const side = 8.74
+  const cloth = canvasTexture(512, 128, ctx => {
+    const shade = ctx.createLinearGradient(0, 0, 0, 128)
+    shade.addColorStop(0, '#25483e'); shade.addColorStop(.46, '#33594c'); shade.addColorStop(1, '#23483f')
+    ctx.fillStyle = shade; ctx.fillRect(0, 0, 512, 128)
+    for (let x = 0; x < 512; x += 3) {
+      ctx.fillStyle = x % 2 ? '#cbd4b70a' : '#142b261a'; ctx.fillRect(x, 0, 1, 128)
+    }
+    for (const y of [4, 123]) {
+      ctx.fillStyle = '#96a595'; ctx.fillRect(0, y, 512, 1)
+      for (let x = 6; x < 512; x += 48) {
+        ctx.fillStyle = '#a1aca0'; ctx.fillRect(x, y - 1, 3, 3)
+        ctx.fillStyle = '#273d34'; ctx.fillRect(x + 1, y, 1, 1)
+      }
+    }
+  })
+  const scrim = new THREE.Mesh(new THREE.PlaneGeometry(16.98, 1.74),
+    coat(0xe0e7db, { map: cloth, side: THREE.DoubleSide, roughness: .99 }))
+  scrim.position.set(0, 1.20, farEnd + .035)
+  scene.add(scrim)
   const rear = screen(side * 2, 3.55)
   rear.position.set(0, 1.82, farEnd)
   scene.add(rear)
@@ -276,9 +333,28 @@ function createFence(scene: THREE.Scene) {
   const tag = new THREE.Mesh(new THREE.PlaneGeometry(.91, .59), new THREE.MeshBasicMaterial({ map: courtTag }))
   tag.position.set(5.55, 2.03, farEnd + .07)
   scene.add(tag)
+  const boardCanvas = signMap.image as HTMLCanvasElement
+  const ctx = boardCanvas.getContext('2d')!
+  const club = ctx.getImageData(0, 0, boardCanvas.width, boardCanvas.height)
+  let last = ''
+  return (score?: { you: number; rival: number }) => {
+    const key = score ? score.you + '/' + score.rival : ''
+    if (key === last) return
+    last = key
+    if (!score) ctx.putImageData(club, 0, 0)
+    else {
+      ctx.fillStyle = '#112f2e'; ctx.fillRect(0, 0, 768, 156)
+      ctx.fillStyle = '#8ca391'; ctx.fillRect(383, 18, 2, 122)
+      ctx.letterSpacing = '2px'; ctx.font = 'bold 24px sans-serif'; ctx.textAlign = 'center'
+      ctx.fillStyle = '#dbedbc'; ctx.fillText('YOU', 190, 40); ctx.fillText('OPPONENT', 578, 40)
+      ctx.font = 'bold 84px monospace'; ctx.fillStyle = '#e1fa84'; ctx.fillText(String(score.you), 190, 126)
+      ctx.fillStyle = '#f8f3de'; ctx.fillText(String(score.rival), 578, 126)
+    }
+    signMap.needsUpdate = true
+  }
 }
 
-function props(scene: THREE.Scene) {
+function props(scene: THREE.Group) {
   const steel = coat(0x283e37, { metalness: .4 })
   const timber = coat(0x897455)
   const bin = coat(0x62816d)
@@ -325,7 +401,7 @@ function props(scene: THREE.Scene) {
   scene.add(hopper)
 }
 
-function courtLighting(scene: THREE.Scene) {
+function courtLighting(scene: THREE.Group) {
   const pole = coat(0x52606a, { metalness: .46, roughness: .48 })
   const casework = coat(0x202b3e, { metalness: .35 })
   const lens = new THREE.MeshBasicMaterial({ color: 0xd1edff, toneMapped: false })
@@ -347,141 +423,59 @@ function courtLighting(scene: THREE.Scene) {
   }
 }
 
-function crownGeometry(seed: number, spokes: number) {
-  const random = seeded(seed)
-  const position = [0, .91, 0]
-  const rings = [[.26, .5], [.57, .07], [.50, -.12], [.23, -.18]]
-  for (const [radius, height] of rings) {
-    for (let i = 0; i < spokes; i += 1) {
-      const angle = i / spokes * Math.PI * 2
-      const width = radius * (.76 + random() * .43)
-      position.push(Math.cos(angle) * width, height + (random() - .5) * .19, Math.sin(angle) * width)
-    }
-  }
-  position.push(0, -.19, 0)
-  const triangles = []
-  for (let i = 0; i < spokes; i += 1) {
-    const next = (i + 1) % spokes
-    triangles.push(0, next + 1, i + 1)
-    for (let row = 0; row < rings.length - 1; row += 1) {
-      const start = row * spokes + 1
-      triangles.push(start + i, start + next, start + i + spokes, start + next, start + next + spokes, start + i + spokes)
-    }
-    triangles.push(rings.length * spokes + 1, (rings.length - 1) * spokes + i + 1, (rings.length - 1) * spokes + next + 1)
-  }
-  const geometry = new THREE.BufferGeometry()
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(position, 3))
-  geometry.setIndex(triangles)
-  geometry.computeVertexNormals()
-  return geometry
-}
-
-function landscaping(scene: THREE.Scene) {
-  const locations: { x: number; z: number; height: number; type: number }[] = []
-  for (let i = 0; i < 265; i += 1) {
-    const z = range(-91, -18.8)
-    const x = range(-70, 70)
-    if (Math.abs(x) < 11 && z > -23) continue
-    locations.push({ x, z, height: range(3.6, 12.6), type: i % 3 })
-  }
-  for (let i = 0; i < 106; i += 1) {
-    const side = i % 2 === 0 ? -1 : 1
-    const x = side * range(side < 0 ? 14 : 24, 66)
-    const z = range(-17, 59)
-    locations.push({ x, z, height: range(4.3, 12.8), type: i % 3 })
-  }
-  for (let i = 0; i < 74; i += 1) {
-    const x = range(-39, 46)
-    const z = range(24, 68)
-    locations.push({ x, z, height: range(4.5, 11.5), type: i % 3 })
-  }
-  const sides = [[-13, -17, 12], [-14.4, -9, 10], [-13.5, -2, 14], [-15.5, 6, 7.5],
-    [12, -16, 10.5], [14.9, -12.2, 11], [14.8, -4.3, 13], [16.8, 1.5, 8.1],
-    [-10.4, -20.1, 7.8], [5.5, -23.1, 12], [-3.2, -23.8, 10], [1.7, -25.7, 12.2]]
-  sides.forEach(([x, z, height], i) => locations.push({ x, z, height, type: i % 3 }))
-  const foliage = coat(0xffffff)
-  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(.071, .16, 1, 7), coat(0x685e46), locations.length)
-  trunk.castShadow = true
-  trunk.receiveShadow = true
-  locations.forEach((location, index) => {
-    const { x, z, height } = location
-    pose.position.set(x, height * .35, z)
-    pose.scale.setScalar(height * .14).setY(height * .7)
-    pose.rotation.set(0, 0, range(-.04, .04))
-    pose.updateMatrix()
-    trunk.setMatrixAt(index, pose.matrix)
+function windFlag(venue: THREE.Group) {
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(.026, .032, 4.2, 10), coat(0xa2aaa4))
+  pole.position.set(-8.63, 2.10, -17.9)
+  venue.add(pole)
+  const cloth = new THREE.CylinderGeometry(.15, .055, 1.03, 10, 9, true)
+  cloth.translate(0, -.515, 0)
+  cloth.rotateZ(Math.PI / 2)
+  const rest = cloth.getAttribute('position').clone()
+  const stripe = canvasTexture(16, 128, ctx => {
+    ctx.fillStyle = '#eeb066'; ctx.fillRect(0, 0, 16, 128)
+    ctx.fillStyle = '#eeeada'
+    for (const y of [18, 61, 102]) ctx.fillRect(0, y, 16, 16)
   })
-  scene.add(trunk)
-  const colors = [0x315350, 0x4a6955, 0x53735e, 0x3f5c4d, 0x657253, 0x345350, 0x577762, 0x435e58]
-  for (let type = 0; type < 3; type += 1) {
-    const trees = locations.filter(location => location.type === type)
-    const crowns = new THREE.InstancedMesh(crownGeometry(972 + type * 42, 11 + type), foliage, trees.length * 5)
-    crowns.castShadow = true
-    crowns.receiveShadow = true
-    trees.forEach(({ x, z, height }, index) => {
-      const base = new THREE.Color(colors[Math.floor(range(0, colors.length))])
-      const width = height * (type === 0 ? .48 : type === 1 ? .39 : .34)
-      for (let level = 0; level < 5; level += 1) {
-        const radius = width * (1 - level * .152)
-        pose.position.set(x + range(-.22, .22), height * (.28 + level * .14), z + range(-.2, .2))
-        pose.scale.set(radius, height * (.26 + level * .014), radius * range(.89, 1.15))
-        pose.rotation.set(range(-.04, .04), range(0, 6.28), range(-.05, .05))
-        pose.updateMatrix()
-        const position = index * 5 + level
-        crowns.setMatrixAt(position, pose.matrix)
-        crowns.setColorAt(position, base.clone().multiplyScalar(range(.72, 1.03) + level * .082))
-      }
-    })
-    scene.add(crowns)
-  }
-
-  const shrubs = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 1), foliage, 194)
-  const rocks = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(1, 0), coat(0xa5a189, { flatShading: true }), 81)
-  for (let i = 0; i < 194; i += 1) {
-    const sign = i % 2 === 0 ? 1 : -1
-    const x = i > 130 ? range(-22, 22) : sign * range(9.15, 17.4)
-    const z = i > 130 ? range(-27, -20.8) : range(-21, 12)
-    const height = range(.18, .73)
-    pose.position.set(x, height * .52 - .04, z)
-    pose.rotation.set(range(0, 3), range(0, 3), 0)
-    pose.scale.set(height * range(1.05, 1.7), height * .89, height * range(.8, 1.7))
-    pose.updateMatrix()
-    shrubs.setMatrixAt(i, pose.matrix)
-    shrubs.setColorAt(i, new THREE.Color(colors[i % colors.length]).multiplyScalar(range(.85, 1.32)))
-    if (i < 81) {
-      pose.position.set(x + .26, .035, z + .36)
-      pose.scale.set(height * .42, height * .21, height * .29)
-      pose.updateMatrix()
-      rocks.setMatrixAt(i, pose.matrix)
+  const sock = new THREE.Mesh(cloth, coat(0xffffff, { map: stripe, side: THREE.DoubleSide }))
+  sock.position.set(-8.63, 4.12, -17.9)
+  venue.add(sock)
+  return (wind: number, time: number) => {
+    const strength = Math.min(1, Math.abs(wind) / 4.5)
+    sock.rotation.y = wind < 0 ? Math.PI : 0
+    const pos = cloth.getAttribute('position')
+    for (let i = 0; i < pos.count; i++) {
+      const x = rest.getX(i)
+      pos.setXYZ(i, x * (.24 + .76 * strength), rest.getY(i) - x * x * (.82 - .70 * strength),
+        rest.getZ(i) + x * x * (.045 + .075 * strength) * Math.sin(7 * time - 5 * x))
     }
+    pos.needsUpdate = true
   }
-  shrubs.castShadow = true
-  shrubs.receiveShadow = true
-  rocks.receiveShadow = true
-  scene.add(shrubs, rocks)
 }
 
-export function buildVenue(scene: THREE.Scene) {
-  createSky(scene)
-  scene.add(new THREE.HemisphereLight(0xc0d9ff, 0x767083, 1.48))
-  const sunlight = new THREE.DirectionalLight(0xffd4aa, 2.45)
-  sunlight.position.set(-24, 21, -12)
+export function buildVenue(scene: THREE.Scene, onReady: () => void) {
+  scene.background = new THREE.Color(0xa8b7bf)
+  const venue = new THREE.Group()
+  scene.add(venue)
+  createPark(venue, onReady)
+  scene.add(new THREE.HemisphereLight(0xd4e6ff, 0x90987c, 1.40))
+  const sunlight = new THREE.DirectionalLight(0xffe1b9, 2.55)
+  sunlight.position.set(-24, 24, -12)
   sunlight.target.position.set(0, 0, -2)
   sunlight.castShadow = true
   sunlight.shadow.mapSize.set(2048, 2048)
-  Object.assign(sunlight.shadow.camera, { left: -23, right: 23, top: 25, bottom: -26, near: 2, far: 68 })
+  Object.assign(sunlight.shadow.camera, { left: -23, right: 23, top: 25, bottom: -26, near: 2, far: 72 })
   sunlight.shadow.bias = -.0002
   sunlight.shadow.normalBias = .022
-  sunlight.shadow.intensity = .72
-  scene.add(sunlight, sunlight.target)
-  const fill = new THREE.DirectionalLight(0xa8d2ff, 1.20)
+  sunlight.shadow.intensity = .52
+  venue.add(sunlight, sunlight.target)
+  const fill = new THREE.DirectionalLight(0xb2d3ef, .83)
   fill.position.set(9, 10, 19)
-  scene.add(fill)
-  const setSurface = createGround(scene)
-  createNet(scene)
-  createFence(scene)
-  props(scene)
-  courtLighting(scene)
-  landscaping(scene)
-  return setSurface
+  venue.add(fill)
+  const surface = createGround(venue)
+  const flex = createNet(venue)
+  const board = createFence(venue)
+  props(venue)
+  courtLighting(venue)
+  const flag = windFlag(venue)
+  return { surface, board, flag, flex, venue }
 }

@@ -1,4 +1,5 @@
 const paths: Record<string, string> = {
+  trophy: '<path d="M7 3h10v5c0 4-2.1 6-5 6s-5-2-5-6V3Zm0 2H3v2c0 3 2 5 5.2 5M17 5h4v2c0 3-2 5-5.2 5M12 14v4m-4 3h8m-7-3h6v3H9z"/>',
   court: '<rect x="4" y="3" width="16" height="18" rx="1.6"/><path d="M4 8h16M4 16h16M4 12h16M12 8v8"/>',
   racket: '<ellipse cx="14.8" cy="8.8" rx="6" ry="7" transform="rotate(37 14.8 8.8)"/><path d="M10 14.5 4 21m5.2-5.2-2.5-1.1M11.5 4.5l7.7 7.1M9.8 7.3l7.2 6.7M17.6 3.6l-7.3 8.9M20.1 6l-7.5 9"/>',
   serve: '<circle cx="17" cy="5.8" r="2.9"/><path d="M17.9 3.1c-2 1.4-2.6 3.3-1.6 5.3M3 18c0-5.5 2.5-9.7 8-11M4.2 13.6l-1 4.8 4.7-1.3M9.4 20.6c1.4-4.3 4.5-6.3 9-6.8"/>',

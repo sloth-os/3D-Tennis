@@ -1,16 +1,25 @@
 import {
   COURT, DRILLS, clamp, inZone, targetFor, zoneCenter,
-  type Aim, type DrillId, type Shot, type Technique, type Vec3,
+  type Aim, type DrillId, type Shot, type Surface, type Technique, type Vec3,
 } from './config.ts'
 import { contactAt, launchTo, makeBall, shotBall, speedOf, stepBall, traceBall, type Ball, type Conditions, type Contact } from './physics.ts'
 import { snapshot, type ReplayFrame, type ShotReplay, type StrokePose } from './replay.ts'
 import { aimWidth, practiceFeed, practiceFeeder, practiceSign, practiceTarget, recoveryRadius, type NtrpPlan, type Take } from './ntrp-training.ts'
+import { advanceFeet, callLanding, interceptFlight, lineDistance, recoveryPosition, Tiebreak, type LineCall, type Pace, type Side } from './point-play.ts'
 
 export type Phase = 'idle' | 'countdown' | 'incoming' | 'outgoing' | 'opponent' | 'recover' | 'between' | 'finished'
 export type Motion = { x: number; z: number }
 export type Cue = { title: string; detail: string; tone: 'neutral' | 'good' | 'warn' }
 export type Sound = 'bounce' | 'hit' | 'good' | 'miss' | 'ready'
+export type SoundSpot = { x: number; surface: Surface; speed: number }
 export type ShotMetrics = {
+  number: number
+  aim: Aim
+  stroke: Technique
+  conditions: Conditions
+  result: 'In flight' | 'In' | 'Target hit' | 'Out' | 'Net' | 'Let'
+  call: LineCall | null
+  clip: ShotReplay
   speed: number
   spin: number
   sideSpin: number
@@ -21,13 +30,15 @@ export type ShotMetrics = {
 
 const HOME = 10.95
 const SERVE_HOME = 12.40
-const SERVE_CONTACT = 0.55
+const SERVE_CONTACT = 0.485
 const MAX_ATTEMPTS = 12
 const EMPTY_CUE: Cue = { title: 'Ready to train', detail: 'Start the drill to receive your first ball.', tone: 'neutral' }
 
 export class Game {
   drill: DrillId = 'forehand'
   plan: NtrpPlan | null = null
+  match: Tiebreak | null = null
+  pace: Pace = 'club'
   shot: Shot = 'topspin'
   conditions: Conditions = { surface: 'hard', wind: 0 }
   adSide = false
@@ -38,13 +49,27 @@ export class Game {
   playerMotion: Motion = { x: 0, z: 0 }
   opponent: Aim = { x: -1.4, z: -10.6 }
   opponentSwing = 1
+  opponentTechnique: Technique = 'forehand'
+  opponentMotion: Aim = { x: 0, z: 0 }
+  playerStride = 0
+  opponentStride = 0
+  intercept: ReturnType<typeof interceptFlight> = null
+  private chaseTime = 0
+  private touchedTape = false
+  private serveFootFault = false
+  private missedSwing = ''
   aim = zoneCenter(targetFor('forehand', false))
   ball: Ball | null = null
   trail: Vec3[] = []
   forecast: Vec3[] = []
+  receiveMark: { feet: Aim; contact: Vec3; bounce: Vec3 | null; side: 'Forehand' | 'Backhand' } | null = null
   lastLanding: Vec3 | null = null
+  lastCall: LineCall | null = null
   lastShot: ShotMetrics | null = null
+  readonly shots: ShotMetrics[] = []
   lastContact: Contact | null = null
+  private lastNet: { contact: Contact; time: number } | null = null
+  get netMotion() { return this.lastNet ? { contact: this.lastNet.contact, age: this.clock - this.lastNet.time } : null }
   replay: ShotReplay | null = null
   attempts = 0
   hits = 0
@@ -55,25 +80,54 @@ export class Game {
   swingClock = 1
   technique: Technique = 'forehand'
   result: Cue = EMPTY_CUE
-  private readonly sound: (sound: Sound) => void
+  private readonly sound: (sound: Sound, spot?: SoundSpot) => void
   private announcedContact = false
   private clock = 0
   private preparation: ReplayFrame[] = []
   private recordUntil = 0
 
-  constructor(sound: (sound: Sound) => void = () => {}) {
+  constructor(sound: (sound: Sound, spot?: SoundSpot) => void = () => {}) {
     this.sound = sound
   }
 
-  get zone() { return this.plan ? practiceTarget(this.plan, this.adSide, this.attempts, this.streak % 2 === 1) : targetFor(this.drill, this.adSide) }
-  get recoverySpot() { return this.plan?.recover ?? { x: 0, z: HOME } }
+  get zone() {
+    if (this.match && this.serving) return { xMin: this.adSide ? 0 : -COURT.singles, xMax: this.adSide ? COURT.singles : 0,
+      zMin: -COURT.service, zMax: 0 }
+    return this.plan ? practiceTarget(this.plan, this.adSide, this.attempts, this.streak % 2 === 1) : targetFor(this.drill, this.adSide)
+  }
+  get recoverySpot() {
+    if (this.match) return recoveryPosition(this.intercept?.ball ?? this.opponent)
+    return this.plan?.recover ?? { x: 0, z: HOME }
+  }
   get recoverySize() { return this.plan ? recoveryRadius(this.plan) : .78 }
-  get progress() { return (this.plan?.score ?? (this.drill === 'rally' ? 'rally' : 'placement')) === 'rally' ? this.bestStreak : this.hits }
+  get progress() { return this.match?.you ?? ((this.plan?.score ?? (this.drill === 'rally' ? 'rally' : 'placement')) === 'rally' ? this.bestStreak : this.hits) }
   get goal() { return this.plan?.goal ?? DRILLS[this.drill].goal }
   get active() { return this.phase !== 'idle' && this.phase !== 'finished' }
-  get serving() { return this.drill === 'serve' }
-  get take(): Take { return this.plan?.take ?? (this.serving ? 'toss' : 'afterBounce') }
-  get showTarget() { return this.plan ? this.plan.placement !== 'court' : this.drill === 'serve' || this.drill === 'forehand' }
+  get serving() { return this.drill === 'serve' || !!this.match && this.match.servingPoint === 'you' && this.match.serviceBall }
+  get courtConditions(): Conditions { return this.match?.end ? { surface: this.conditions.surface, wind: -this.conditions.wind } : this.conditions }
+  get take(): Take {
+    if (this.match && !this.match.serviceBall && this.phase === 'incoming' && this.ball?.bounces === 0)
+      return this.ball.position.y > 2.10 ? 'overhead' : 'beforeBounce'
+    return this.plan?.take ?? (this.serving ? 'toss' : 'afterBounce')
+  }
+  get showTarget() { return this.plan ? this.plan.placement !== 'court' : this.serving || this.drill === 'forehand' }
+  get opponentPose(): StrokePose {
+    if (this.opponentSwing < .51) return { technique: this.opponentTechnique, progress: .62 + this.opponentSwing * .74 }
+    if (this.match?.servingPoint === 'rival' && this.phase === 'countdown')
+      return { technique: 'serve', progress: clamp(this.phaseTime * .61, 0, .59) }
+    if (this.intercept && (this.phase === 'opponent' || this.phase === 'outgoing')) {
+      const lead = this.intercept.ball.t - this.chaseTime
+      return { technique: this.intercept.ball.x <= this.opponent.x ? 'forehand' : 'backhand',
+        progress: clamp(.58 - lead * .89, .025, .58) }
+    }
+    return { technique: 'forehand', progress: .025 }
+  }
+  get opponentToss(): Ball | null {
+    if (this.phase !== 'countdown' || this.match?.servingPoint !== 'rival' || this.phaseTime < .46) return null
+    const t = this.phaseTime - .46
+    return makeBall({ x: this.opponent.x - .27 - .14 * t, y: 1.44 + 4.78 * t - 4.905 * t * t,
+      z: this.opponent.z + .20 + .48 * t }, { x: -.14, y: 4.78 - 9.81 * t, z: .48 })
+  }
   get netOpponent() {
     if (this.plan?.exercise === 'doubles') return { x: 2.28, z: -3.90 }
     if (this.plan?.exercise === 'lob' || this.plan?.exercise === 'pass') return { x: .28, z: -4.45 }
@@ -103,6 +157,7 @@ export class Game {
   }
 
   reset(): void {
+    this.match = this.drill === 'match' ? new Tiebreak(this.pace) : null
     this.phase = 'idle'
     this.paused = false
     this.phaseTime = 0
@@ -112,26 +167,44 @@ export class Game {
     this.bestStreak = 0
     this.result = EMPTY_CUE
     this.lastShot = null
+    this.shots.length = 0
     this.lastLanding = null
+    this.lastCall = null
     this.lastContact = null
+    this.lastNet = null
     this.replay = null
     this.clock = 0
     this.preparation = []
     this.recordUntil = 0
     this.ball = null
     this.forecast = []
+    this.receiveMark = null
     this.trail = []
-    this.aim = zoneCenter(this.zone)
     this.placePlayers()
+    this.aim = zoneCenter(this.zone)
   }
 
   private placePlayers(): void {
+    this.match?.prepare()
+    if (this.match) this.adSide = this.match.ad
     const serving = this.serving
     this.player = { x: serving ? (this.adSide ? -1.7 : 1.7) : this.drill === 'forehand' ? 0.45 : 0,
       z: serving ? SERVE_HOME : HOME }
     if (this.plan && !serving) this.player = { ...this.plan.home }
     this.opponent = this.plan ? practiceFeeder(this.plan) : { x: -1.4, z: -10.6 }
+    if (this.match) {
+      const sign = this.adSide ? -1 : 1
+      if (!serving) this.player = { x: sign * 1.92, z: 10.34 }
+      this.opponent = { x: -sign * (serving ? 1.80 : 1.87), z: serving ? -10.75 : -12.36 }
+    }
     this.playerMotion = { x: 0, z: 0 }
+    this.opponentMotion = { x: 0, z: 0 }
+    this.playerStride = this.opponentStride = 0
+    this.intercept = null
+    this.touchedTape = false
+    this.serveFootFault = false
+    this.missedSwing = ''
+    this.opponentTechnique = 'forehand'
     this.technique = this.swingTechnique()
     this.swingClock = 1
     this.opponentSwing = 1
@@ -155,19 +228,22 @@ export class Game {
 
   setConditions(conditions: Conditions): void {
     this.conditions = conditions
-    if (this.ball && (this.phase === 'incoming' || this.phase === 'outgoing')) {
-      const flight = traceBall(this.ball, conditions, 2.4, this.phase === 'outgoing')
+    if (this.ball && (this.phase === 'incoming' || this.phase === 'outgoing' || this.phase === 'opponent')) {
+      const flight = traceBall(this.ball, this.courtConditions, 2.65)
       this.forecast = flight.points
+      if (this.phase !== 'incoming') this.trackOpponent(flight.points)
+      else this.markReceive(flight)
       if (this.phase === 'outgoing' && this.ball.position.z > 0 && this.lastShot) this.lastShot.clearance = flight.clearance
     }
   }
 
   split(): void {
-    if (!this.active || this.paused || this.splitClock < 0.28 || this.drill === 'serve') return
+    if (!this.active || this.paused || this.splitClock < 0.28 || this.serving) return
     this.splitClock = 0
-    if ((this.phase === 'countdown' && this.phaseTime > 0.68)
+    const lead = this.intercept ? this.intercept.ball.t - this.chaseTime : Infinity
+    this.splitTimed = (this.phase === 'countdown' && this.phaseTime > 0.68)
       || (this.phase === 'incoming' && this.phaseTime < 0.30)
-      || (this.phase === 'opponent' && this.phaseTime > 0.25)) this.splitTimed = true
+      || ((this.phase === 'outgoing' || this.phase === 'opponent') && lead >= -.10 && lead < .22)
   }
 
   get contactError(): number {
@@ -179,7 +255,7 @@ export class Game {
   private canReach(): boolean {
     if (!this.ball) return false
     const { position } = this.ball
-    if (this.serving) return Math.abs(position.x - this.player.x) < 1.05 && position.y > 2.1
+    if (this.serving) return Math.abs(position.x - this.player.x - .32) < .62 && Math.abs(position.z - this.player.z + .45) < .60 && position.y > 2.1
     if (this.take === 'overhead') return Math.abs(position.x - this.player.x) < 1.45 && position.y >= 1.90 && position.y <= 3.18
     if (this.take === 'rising' && (position.y > .87 || this.ball.velocity.y <= 0)) return false
     const contactX = this.player.x + (position.x >= this.player.x ? 0.60 : -0.60)
@@ -187,6 +263,26 @@ export class Game {
       : this.plan?.direction === 'forehand' ? position.x >= this.player.x - .08 : true
     return correctSide && Math.abs(position.x - contactX) < (this.plan ? aimWidth(this.plan) : .95)
       && position.y >= (this.take === 'rising' ? .10 : .17) && position.y <= 2.30
+  }
+
+  private markReceive(flight: ReturnType<typeof traceBall>) {
+    const bounce = this.ball && this.ball.bounces > 0 ? this.receiveMark?.bounce ?? null : flight.landing
+    this.receiveMark = null
+    if (this.serving) return
+    const take = this.plan?.take ?? (this.match && this.player.z <= COURT.service && !this.match.serviceBall ? 'beforeBounce' : 'afterBounce')
+    const bounced = take === 'afterBounce' || take === 'rising'
+    const depth = this.plan?.home.z ?? this.player.z
+    let nearest = Infinity
+    for (const p of flight.points) {
+      if (p.z <= .50 || p.bounces !== Number(bounced) || p.y < (take === 'overhead' ? 1.90 : .20)
+        || p.y > (take === 'rising' ? .85 : take === 'overhead' ? 3.08 : 2.10)) continue
+      const cost = Math.abs(p.z - (depth - .65))
+      if (cost >= nearest) continue
+      nearest = cost
+      const sign = this.plan?.direction === 'forehand' ? 1 : this.plan?.direction === 'backhand' ? -1 : Math.sign(p.x - this.player.x) || 1
+      this.receiveMark = { feet: { x: p.x - sign * .62, z: p.z + .65 }, contact: p, bounce: bounced ? bounce : null,
+        side: sign > 0 ? 'Forehand' : 'Backhand' }
+    }
   }
 
   private contactOpen(): boolean {
@@ -216,29 +312,33 @@ export class Game {
 
   get posture(): StrokePose {
     if (this.swingClock < .50) return { technique: this.technique, progress: clamp(.62 + this.swingClock * .76, .62, 1) }
-    const serve = this.drill === 'serve'
+    const serve = this.serving
     const technique = this.swingTechnique()
     const progress = this.phase === 'incoming'
-      ? serve ? clamp(this.phaseTime * .91, 0, .55) : clamp((this.contactError + .66) * .79, .02, .55)
+      ? serve ? clamp(this.phaseTime * .56 / SERVE_CONTACT, 0, .56) : clamp((this.contactError + .66) * .79, .02, .55)
       : serve ? 0 : .025
     return { technique, progress }
   }
 
   get previewBall(): Ball {
     const sign = this.plan ? practiceSign(this.plan, this.adSide, this.attempts) : 1
-    const origin = { x: this.player.x + .52 * sign, y: this.serving || this.take === 'overhead' ? 2.72
-      : this.take === 'rising' ? .40 : 1.08, z: this.player.z - .78 }
+    const origin = { x: this.player.x + (this.serving ? .34 : .52 * sign), y: this.serving ? 2.55 : this.take === 'overhead' ? 2.72
+      : this.take === 'rising' ? .40 : 1.08, z: this.player.z - (this.serving ? .43 : .78) }
     return this.launch(origin, this.aim, 1)
   }
 
   private launch(origin: Vec3, aim: Aim, quality: number): Ball {
     const scale = !this.plan ? 1 : this.plan.tier < 2 ? 1.07 : this.plan.tier === 7 && this.plan.exercise !== 'spinServe' ? .96 : 1
-    return shotBall(origin, aim, this.shot, this.serving, quality, this.plan?.trajectory, scale)
+    const trajectory = this.match && this.take === 'beforeBounce' ? 'volley' : this.match && this.take === 'overhead' ? 'smash' : this.plan?.trajectory
+    return shotBall(origin, aim, this.shot, this.serving, quality, trajectory, scale)
   }
 
   cue(): Cue {
-    if (this.paused) return { title: 'Drill paused', detail: 'Resume when you’re ready.', tone: 'neutral' }
+    if (this.paused) return { title: this.match ? 'Tiebreak paused' : 'Drill paused', detail: 'Resume when you’re ready.', tone: 'neutral' }
     if (this.phase === 'countdown') {
+      if (this.match) return { title: this.serving ? 'Your serve' : 'Return of serve',
+        detail: (this.match.played > 0 && this.match.played % 6 === 0 ? 'Change of ends · ' : '') + (this.match.ad ? 'Ad court' : 'Deuce court')
+          + ' · ' + (this.serving ? 'Aim into the diagonal box, then time the toss.' : 'Split on the strike and let the serve bounce.'), tone: 'neutral' }
       if (this.plan) return { title: this.plan.title, detail: this.plan.cue, tone: 'neutral' }
       if (this.drill === 'serve') return { title: 'Set for the toss', detail: 'Aim into the diagonal service box.', tone: 'neutral' }
       if (this.drill === 'footwork') return { title: 'Watch the feeder', detail: 'Use Shift or Split as the feeder hits.', tone: 'neutral' }
@@ -246,16 +346,24 @@ export class Game {
     }
     if (this.phase === 'incoming') {
       const error = this.contactError
+      if (this.missedSwing && this.swingClock < .26) return { title: this.missedSwing, detail: 'The ball is live. Recover for another swing.', tone: 'warn' }
       if (this.contactOpen()) return { title: 'Swing now', detail: 'Press Space or tap Swing.', tone: 'good' }
-      if (this.drill === 'serve') return { title: 'Follow the toss', detail: 'Swing as it reaches the top of the window.', tone: 'neutral' }
-      if (this.take === 'beforeBounce') return { title: 'Read the volley', detail: 'Move to the feed and swing before it bounces.', tone: 'neutral' }
+      if (this.serving) return { title: 'Follow the toss', detail: 'Swing as it reaches the top of the window.', tone: 'neutral' }
+      if (this.take === 'beforeBounce') return this.match
+        ? { title: 'Read the flight', detail: 'Take the ball early if you can reach it, or let it bounce.', tone: 'neutral' }
+        : { title: 'Read the volley', detail: 'Move to the feed and swing before it bounces.', tone: 'neutral' }
       if (this.take === 'overhead') return { title: 'Track the lob', detail: 'Get behind the ball and reach as it drops into range.', tone: 'neutral' }
       if (this.take === 'rising') return { title: 'Catch the rise', detail: 'Meet the ball just after the bounce.', tone: 'neutral' }
       if (this.ball && this.ball.bounces > 0 && Math.abs(error) < 0.28 && !this.canReach()) {
-        return { title: 'Move to the ball', detail: 'Leave room for the racket beside your body.', tone: 'warn' }
+        const dx = (this.receiveMark?.feet.x ?? this.player.x) - this.player.x
+        return { title: 'Move to the ball', detail: Math.abs(dx) > .45
+          ? 'Move ' + Math.abs(dx).toFixed(1) + ' m ' + (dx < 0 ? 'left' : 'right') + ' toward the shoe marks.'
+          : 'Leave room for the racket beside your body.', tone: 'warn' }
       }
       return { title: 'Read the bounce', detail: 'Move into position and wait for the contact window.', tone: 'neutral' }
     }
+    if (this.match && (this.phase === 'outgoing' || this.phase === 'opponent'))
+      return { title: this.touchedTape ? 'Net cord' : 'Cover the reply', detail: 'Recover toward the blue ring. Split as your opponent strikes.', tone: 'neutral' }
     if (this.phase === 'outgoing') return { title: 'Track your shot', detail: 'Watch where it crosses the net and lands.', tone: 'neutral' }
     if (this.phase === 'opponent') return { title: 'Stay in the rally', detail: 'Reset your feet as the feeder moves.', tone: 'good' }
     if (this.phase === 'recover') return { title: this.plan ? 'Reach the recovery ring' : 'Recover to center', detail: 'Move into the ring before the next feed.', tone: 'warn' }
@@ -264,14 +372,27 @@ export class Game {
 
   swing(): void {
     if (this.paused || this.phase !== 'incoming' || !this.ball) return
+    if (this.match && this.swingClock < .26) return
     const error = this.contactError
     const serving = this.serving
     const window = this.plan?.contactWindow ?? .17
     this.technique = this.swingTechnique()
     this.swingClock = 0
 
-    if (serving && this.player.z <= COURT.halfLength) {
-      this.finishAttempt(false, 'Foot fault', 'Start and strike the serve from behind the baseline.')
+    if (this.match && !serving) {
+      if (Math.abs(error) > window || !this.canReach()) {
+        this.missedSwing = Math.abs(error) <= window ? 'Swing missed wide' : error < 0 ? 'Early swing' : 'Late swing'
+        return
+      }
+      if (this.match.serviceBall && this.ball.bounces === 0) {
+        this.match.serveIn()
+        this.pointTo('rival', 'Serve volleyed', 'The receiver must let the serve bounce before making contact.')
+        return
+      }
+    }
+
+    if (serving && (this.serveFootFault || this.player.z <= COURT.halfLength)) {
+      this.finishAttempt(false, 'Foot fault', 'Set both feet behind the baseline on the serving side.')
       return
     }
     if ((this.take === 'beforeBounce' || this.take === 'overhead') && this.ball.bounces > 0) {
@@ -301,14 +422,21 @@ export class Game {
     }
     const incoming = this.ball
     this.ball = this.launch(incoming.position, aim, quality)
+    this.ball.rotation = { ...incoming.rotation }
+    if (this.match) this.match.strikes++
+    this.touchedTape = false
     this.lastContact = contactAt('racket', this.ball.position, incoming.velocity, this.ball.velocity, this.conditions.surface)
     this.replay = {
-      frames: [...this.preparation, snapshot(this.clock, this.ball, this.player, this.posture, this.conditions)],
+      frames: [...this.preparation, this.recordFrame()],
       events: [{ time: this.clock, contact: this.lastContact }],
+      score: this.match ? { you: this.match.you, rival: this.match.rival } : undefined,
     }
     this.recordUntil = this.clock + 3.2
-    const flight = traceBall(this.ball, this.conditions, 2.4, true)
+    const flight = traceBall(this.ball, this.courtConditions, 2.95)
+    this.trackOpponent(flight.points)
     this.lastShot = {
+      number: (this.shots.at(-1)?.number ?? 0) + 1, aim: { ...this.aim }, stroke: this.technique,
+      conditions: { ...this.courtConditions }, result: 'In flight', call: null, clip: this.replay,
       speed: speedOf(this.ball.velocity),
       spin: this.ball.spin,
       sideSpin: this.ball.sideSpin,
@@ -316,10 +444,46 @@ export class Game {
       clearance: flight.clearance,
       landing: null,
     }
+    this.shots.push(this.lastShot)
+    if (this.shots.length > 32) this.shots.shift()
     this.trail = []
     this.forecast = flight.points
-    this.sound('hit')
+    this.sound('hit', { x: incoming.position.x, surface: this.conditions.surface, speed: speedOf(this.ball.velocity) })
     this.enter('outgoing')
+  }
+
+  private recordFrame(): ReplayFrame {
+    return snapshot(this.clock, this.ball!, this.player, this.posture, this.courtConditions,
+      { velocity: this.playerMotion, stride: this.playerStride, split: this.splitClock },
+      { position: this.opponent, pose: this.opponentPose,
+        feet: { velocity: this.opponentMotion, stride: this.opponentStride, split: 1 } }, this.match?.end ?? 0)
+  }
+
+  private trackOpponent(points: Parameters<typeof interceptFlight>[0]) {
+    this.chaseTime = 0
+    this.intercept = this.drill === 'match' || this.drill === 'rally'
+      ? interceptFlight(points, this.opponent, this.match?.runningSpeed ?? 6.65, this.match?.parameters.reaction ?? .12) : null
+  }
+
+  private moveOpponent(dt: number) {
+    const chasing = this.phase === 'outgoing' || this.phase === 'opponent'
+    if (chasing) this.chaseTime += dt
+    const recovering = this.match && this.phase === 'incoming' && !this.match.serviceBall
+    const target = chasing ? this.intercept?.stance : recovering ? recoveryPosition(this.player, -10.4) : null
+    let vx = 0, vz = 0
+    if (target && (!chasing || this.chaseTime >= (this.match?.parameters.reaction ?? .12))) {
+      const dx = target.x - this.opponent.x, dz = target.z - this.opponent.z
+      const distance = Math.hypot(dx, dz)
+      const speed = Math.min(this.match?.runningSpeed ?? 6.65, distance * 7) * (recovering ? .77 : 1)
+      if (distance > .045) { vx = dx * speed / distance; vz = dz * speed / distance }
+    }
+    advanceFeet(this.opponent, this.opponentMotion, { x: vx, z: vz }, dt, this.conditions.surface)
+    const distance = Math.hypot(this.opponentMotion.x, this.opponentMotion.z) * dt
+    this.opponentStride += distance * 4.45
+    if (this.match && (chasing || recovering)) {
+      this.match.rivalWork += distance
+      this.match.stats.rival.distance += distance
+    }
   }
 
   update(dt: number, motion: Motion): void {
@@ -331,6 +495,7 @@ export class Game {
     this.clock += dt
     this.phaseTime += dt
     this.move(dt, motion)
+    this.moveOpponent(dt)
 
     if (this.phase === 'countdown' && this.phaseTime >= 0.94) {
       this.feed()
@@ -338,12 +503,12 @@ export class Game {
     }
 
     if (this.ball) {
-      const impact = stepBall(this.ball, dt, this.conditions)
+      const impact = stepBall(this.ball, dt, this.courtConditions)
       if (this.phase === 'incoming') {
-        this.preparation.push(snapshot(this.clock, this.ball, this.player, this.posture, this.conditions))
+        this.preparation.push(this.recordFrame())
         if (this.preparation.length > 46) this.preparation.shift()
       } else if (this.replay && this.clock <= this.recordUntil) {
-        this.replay.frames.push(snapshot(this.clock, this.ball, this.player, this.posture, this.conditions))
+        this.replay.frames.push(this.recordFrame())
       }
       if (this.ball.bounces < 3) {
         this.trail.push({ ...this.ball.position })
@@ -351,18 +516,50 @@ export class Game {
       }
       if (impact && this.phase !== 'between' && this.phase !== 'recover') {
         this.lastContact = impact.contact
-        this.sound(impact.kind === 'bounce' ? 'bounce' : 'miss')
+        if (impact.kind !== 'bounce') this.lastNet = { contact: impact.contact, time: this.clock }
+        this.sound(impact.kind === 'bounce' || impact.kind === 'cord' ? 'bounce' : 'miss',
+          { x: impact.position.x, surface: this.conditions.surface, speed: Math.abs(impact.contact.before.y) })
       }
+      if (impact?.kind === 'cord') this.touchedTape = true
       if (impact && this.phase === 'outgoing') {
         this.replay?.events.push({ time: this.clock, contact: impact.contact })
-        this.recordUntil = this.clock + .44
-        if (impact.kind === 'net') this.finishAttempt(false, 'Into the net', 'Aim deeper or use topspin for a higher flight path.')
-        else this.resolveLanding(impact.position)
+        if (impact.kind !== 'cord') this.recordUntil = this.clock + .44
+        if (impact.kind === 'net') {
+          if (this.lastShot) this.lastShot.result = 'Net'
+          this.finishAttempt(false, 'Into the net', 'Aim deeper or use topspin for a higher flight path.')
+        }
+        else if (impact.kind === 'bounce') this.resolveLanding(impact.position)
         return
+      }
+      if (this.match && this.phase === 'incoming' && !this.serving && impact) {
+        if (impact.kind === 'net') {
+          if (this.match.serviceBall) this.serviceFault('Serve into the net')
+          else this.pointTo('you', 'Opponent hit the net', 'Your previous shot left the opponent a difficult reply.')
+          return
+        }
+        if (impact.kind === 'bounce' && this.ball.bounces === 1) {
+          const call = callLanding(impact.position, true, this.match.serviceBall ? this.adSide : undefined)
+          this.lastCall = call
+          this.lastLanding = impact.position
+          if (!call.inside) {
+            if (this.match.serviceBall) this.serviceFault(lineDistance(call))
+            else this.pointTo('you', 'Opponent hit out', lineDistance(call))
+            return
+          }
+          if (this.match.serviceBall) {
+            if (this.touchedTape) { this.serviceLet(); return }
+            this.match.serveIn()
+          }
+        }
       }
       const late = this.plan ? this.plan.contactWindow + .14 : .30
       const contactTimeout = this.take === 'overhead' ? 3.7 : 3.3
-      if (this.phase === 'incoming' && (this.contactError > late || this.ball.bounces >= 2 || this.phaseTime > contactTimeout)) {
+      if (this.phase === 'incoming' && this.match && this.serving && this.ball.bounces === 1) {
+        this.result = { title: 'Toss reset', detail: 'An untouched toss can be taken again. Swing near the top of the next toss.', tone: 'neutral' }
+        this.enter('between')
+        return
+      }
+      if (this.phase === 'incoming' && ((!this.match && this.contactError > late) || this.ball.bounces >= 2 || this.phaseTime > contactTimeout)) {
         this.finishAttempt(false, 'Missed contact', 'Use the green timing window to meet the next ball.')
         return
       }
@@ -371,8 +568,15 @@ export class Game {
         this.sound('ready')
       }
       if (this.phase === 'opponent') {
-        this.opponent.x += clamp(this.ball.position.x - this.opponent.x, -dt * 6, dt * 6)
-        if (this.ball.position.z < -9.35 || this.ball.bounces >= 2 || this.phaseTime > 1) this.feed(this.ball.position)
+        const p = this.ball.position
+        const reachable = this.ball.bounces === 1 && p.y > .24 && p.y < 2.05
+          && Math.abs(p.x - this.opponent.x) < 1.22 && Math.abs(p.z - (this.opponent.z + .59)) < .86
+        if (reachable && (!this.intercept || this.chaseTime >= this.intercept.ball.t - .035)) {
+          this.feed(p)
+        } else if (this.ball.bounces >= 2 || this.phaseTime > 2.45) {
+          if (this.match) this.pointTo('you', this.match.strikes === 1 ? 'Ace' : 'Clean winner', 'The second bounce beat the opponent to the ball.')
+          else { this.ball = null; this.enter('countdown') }
+        }
         return
       }
       if (this.phase === 'outgoing' && this.phaseTime > 3.2) {
@@ -397,9 +601,12 @@ export class Game {
       this.trail = []
       this.forecast = []
       this.splitTimed = false
-      if (this.progress >= this.goal || this.attempts >= MAX_ATTEMPTS) this.enter('finished')
+      if (this.match ? this.match.finished : this.progress >= this.goal || this.attempts >= MAX_ATTEMPTS) this.enter('finished')
       else {
-        this.resetPracticeAim()
+        if (this.match) {
+          this.placePlayers()
+          this.aim = this.serving ? { x: (this.adSide ? 1 : -1) * 2.12, z: -4.85 } : { x: this.adSide ? 2.0 : -2.0, z: -8.85 }
+        } else this.resetPracticeAim()
         this.enter('countdown')
       }
     }
@@ -412,24 +619,33 @@ export class Game {
 
   private move(dt: number, motion: Motion): void {
     const strength = Math.max(1, Math.hypot(motion.x, motion.z))
-    const pace = this.splitTimed && this.splitClock < 0.58 ? 8.4 : 6.5
-    const blend = Math.min(1, dt * 18)
-    this.playerMotion.x += (motion.x * pace / strength - this.playerMotion.x) * blend
-    this.playerMotion.z += (motion.z * pace / strength - this.playerMotion.z) * blend
-    this.player.x = clamp(this.player.x + this.playerMotion.x * dt, -6.8, 6.8)
-    this.player.z = clamp(this.player.z + this.playerMotion.z * dt, 3.4, 15.25)
+    const pace = this.splitTimed && this.splitClock > .18 && this.splitClock < .58 ? 8.4 : 6.5
+    const airborne = this.splitClock > .085 && this.splitClock < .185
+    const desired = airborne ? this.playerMotion : { x: motion.x * pace / strength, z: motion.z * pace / strength }
+    advanceFeet(this.player, this.playerMotion, desired, dt, this.conditions.surface)
+    this.player.x = clamp(this.player.x, -6.8, 6.8)
+    this.player.z = clamp(this.player.z, this.match ? 1.35 : 3.4, 15.25)
+    const distance = Math.hypot(this.playerMotion.x, this.playerMotion.z) * dt
+    this.playerStride += distance * 4.45
+    if (this.match && this.phase !== 'between') this.match.stats.you.distance += distance
+    if (this.serving && this.phase === 'incoming' && (this.player.z <= COURT.halfLength
+      || (this.adSide ? -1 : 1) * this.player.x < 0 || Math.abs(this.player.x) > COURT.singles)) this.serveFootFault = true
   }
 
   private feed(returnFrom?: Vec3): void {
     const { player, drill } = this
-    const wind = this.conditions.wind
-    if (drill === 'serve') {
-      this.ball = makeBall({ x: player.x + 0.47, y: 1.54, z: player.z - 0.37 }, { x: 0.075, y: 4.91, z: -1.03 })
+    const wind = this.courtConditions.wind
+    const arrive = returnFrom ? this.ball?.velocity : this.opponentToss?.velocity
+    if (this.serving) {
+      this.ball = makeBall({ x: player.x + .27, y: 1.44, z: player.z - .20 }, { x: .14, y: 4.78, z: -.48 })
+    } else if (this.match) {
+      this.ball = returnFrom
+        ? this.match.opponentReturn(returnFrom, player, Math.hypot(this.opponentMotion.x, this.opponentMotion.z), wind)
+        : this.match.opponentServe(wind)
+      this.match.strikes++
     } else if (this.plan) {
       this.ball = practiceFeed(this.plan, this.attempts, this.opponent, wind, returnFrom)
-      this.opponent = { x: this.ball.position.x - .42, z: this.ball.position.z - .35 }
-      this.opponentSwing = 0
-      this.sound('hit')
+      if (!returnFrom) this.opponent = { x: this.ball.position.x - .42, z: this.ball.position.z - .35 }
     } else {
       const forehand = [1.05, 0.99, 1.42, 0.87, 1.18]
       const footwork = [2.76, -2.72, 2.92, -2.6]
@@ -437,34 +653,54 @@ export class Game {
       const pattern = drill === 'forehand' ? forehand : drill === 'footwork' ? footwork : rally
       const x = pattern[this.attempts % pattern.length]
       const z = (drill === 'footwork' ? 8.2 : 8.45) + (this.attempts % 3) * 0.29
-      const origin = returnFrom
-        ? { x: returnFrom.x, y: Math.max(returnFrom.y, 0.72), z: Math.min(returnFrom.z, -6.8) }
-        : { x: this.opponent.x + 0.45, y: 1.48, z: this.opponent.z + 0.35 }
-      this.opponent.x = origin.x - 0.45
+      const origin = returnFrom ?? { x: this.opponent.x - 0.45, y: 1.48, z: this.opponent.z + 0.35 }
       this.ball = launchTo(origin, { x, z }, drill === 'footwork' ? 1.42 : 1.34, 630, wind)
-      this.opponentSwing = 0
-      this.sound('hit')
     }
-    this.trail = []
+    if (!this.serving) {
+      if (arrive) this.lastContact = contactAt('racket', this.ball.position, arrive, this.ball.velocity, this.conditions.surface)
+      this.opponentTechnique = !returnFrom && (this.match || this.plan?.exercise === 'return' || this.plan?.exercise === 'pressureReturn')
+        ? 'serve' : this.ball.position.x <= this.opponent.x ? 'forehand' : 'backhand'
+      this.opponentSwing = 0
+      this.sound('hit', { x: this.ball.position.x, surface: this.conditions.surface, speed: speedOf(this.ball.velocity) })
+    }
+    this.intercept = null
+    this.touchedTape = false
+    this.serveFootFault = false
+    this.missedSwing = ''
     this.lastLanding = null
+    this.lastCall = null
+    this.trail = []
     this.preparation = []
     this.recordUntil = 0
     this.announcedContact = false
-    this.forecast = traceBall(this.ball, this.conditions, this.plan?.take === 'overhead' ? 3 : 2.58).points
+    const flight = traceBall(this.ball, this.courtConditions, this.plan?.take === 'overhead' ? 3 : 2.58)
+    this.forecast = flight.points
     this.enter('incoming')
+    this.markReceive(flight)
   }
 
   private resolveLanding(position: Vec3): void {
     this.lastLanding = position
     if (this.lastShot) this.lastShot.landing = position
-    const serve = this.drill === 'serve'
-    const correctHalf = this.adSide ? position.x >= 0 : position.x <= 0
-    const width = this.plan?.exercise === 'doubles' ? COURT.doubles : COURT.singles
-    const legal = inZone(position, { xMin: -width, xMax: width,
-      zMin: serve ? -COURT.service : -COURT.halfLength, zMax: 0 }) && (!serve || correctHalf)
-    if (!legal) {
+    const serve = this.serving
+    const call = callLanding(position, false, serve ? this.adSide : undefined, this.plan?.exercise === 'doubles')
+    this.lastCall = call
+    if (this.lastShot) {
+      this.lastShot.call = call
+      this.lastShot.result = !call.inside ? 'Out' : serve && this.touchedTape ? 'Let'
+        : !this.match && this.showTarget && inZone(position, this.zone) ? 'Target hit' : 'In'
+    }
+    if (!call.inside) {
       const title = serve ? 'Service fault' : position.z < -COURT.halfLength ? 'Long' : position.z >= 0 ? 'Short' : 'Wide'
-      this.finishAttempt(false, title, serve ? 'Land your first bounce inside the diagonal service box.' : 'Choose a target with more room inside the singles lines.')
+      this.finishAttempt(false, title, lineDistance(call) + '. Aim farther inside on the next ball.')
+    } else if (serve && this.touchedTape) {
+      this.serviceLet()
+    } else if (this.match) {
+      if (serve) {
+        this.match.serveIn()
+        this.aim = { x: this.adSide ? -2.35 : 2.35, z: -9.1 }
+      }
+      this.enter('opponent')
     } else if (this.plan) {
       this.scorePractice(position)
     } else if (serve || this.drill === 'forehand') {
@@ -516,11 +752,43 @@ export class Game {
   }
 
   private finishAttempt(success: boolean, title: string, detail: string): void {
+    if (this.match) {
+      if (this.serving) this.serviceFault(title === 'Service fault' ? detail : title)
+      else {
+        const reason = this.match.strikes === 1 && !this.match.serviceBall && title === 'Missed contact' ? 'Ace' : title
+        this.pointTo('rival', reason, detail)
+      }
+      return
+    }
     this.attempts += 1
     if (success) this.hits += 1
     else this.streak = 0
     this.result = { title, detail, tone: success ? 'good' : 'warn' }
     this.sound(success ? 'good' : 'miss')
+    this.enter('between')
+  }
+
+  private pointTo(winner: Side, reason: string, detail: string) {
+    this.match!.award(winner, reason)
+    this.attempts = this.match!.played
+    this.result = { title: (winner === 'you' ? 'Your point' : 'Opponent’s point') + ' · ' + reason,
+      detail, tone: winner === 'you' ? 'good' : 'warn' }
+    this.sound(winner === 'you' ? 'good' : 'miss')
+    this.enter('between')
+  }
+
+  private serviceFault(detail: string) {
+    const match = this.match!
+    const lost = match.fault()
+    this.attempts = match.played
+    this.result = { title: lost ? 'Double fault · ' + (match.servingPoint === 'you' ? 'Opponent’s point' : 'Your point')
+      : 'First fault · Second serve', detail, tone: match.servingPoint === 'you' ? 'warn' : 'neutral' }
+    this.sound(lost && match.servingPoint === 'rival' ? 'good' : 'miss')
+    this.enter('between')
+  }
+
+  private serviceLet() {
+    this.result = { title: 'Let · Replay the serve', detail: 'The serve clipped the tape and landed in the correct box.', tone: 'neutral' }
     this.enter('between')
   }
 }

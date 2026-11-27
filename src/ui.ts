@@ -4,6 +4,8 @@ import { REFERENCES, TECHNIQUES } from './coaching.ts'
 import { COURT_CAMERAS, LAB_CAMERAS } from './cameras.ts'
 import { MUSCLES } from './motion.ts'
 import { ntrpMarkup, ntrpReferenceMarkup } from './ntrp-ui.ts'
+import { reportMarkup } from './session-review.ts'
+import { OPPONENTS } from './point-play.ts'
 
 const options = (labels: Record<string, string>) => Object.entries(labels).map(([key, value]) =>
   `<option value="${key}">${value}</option>`).join('')
@@ -28,7 +30,7 @@ const orbit = (id: string) => `<div class="orbit-controls" id="${id}-controls" h
   <button class="glass-button" type="button" id="${id}-reset" aria-label="Recenter camera" title="Recenter camera">${icon('reset', 15)}</button>
 </div>`
 
-const drillTitles = { forehand: 'Forehand', serve: 'Serve', footwork: 'Footwork', rally: 'Rally' } as const
+const drillTitles = { forehand: 'Forehand', serve: 'Serve', footwork: 'Footwork', rally: 'Rally', match: 'Tiebreak' } as const
 const drillCards = DRILL_ORDER.map(id => {
   const drill = DRILLS[id]
   return `<button class="drill-card theme-${drill.theme}" data-drill="${id}" type="button" aria-pressed="false" title="${drill.title}">
@@ -43,10 +45,16 @@ const training = `
         <div class="court-viewport" id="training-canvas"><div class="world-labels" aria-label="Interactive court markers"></div></div>
       </div>
       <div class="stage-top">
-        <div class="stage-id"><span class="court-badge" id="court-badge"><i></i> <span>Live court</span></span><span class="court-location">Northwood Court</span></div>
+        <div class="stage-id"><span class="court-badge" id="court-badge"><i></i> <span>Live court</span></span><span class="court-location">Northwood Court</span><span class="wind-readout" id="court-wind" hidden></span></div>
         ${tools('camera', 'Court camera', COURT_CAMERAS, 'training-panel')}
       </div>
       ${orbit('court-orbit')}
+      <div class="match-board" id="match-board" role="group" aria-label="Tiebreak scoreboard" hidden>
+        <div class="board-caption"><span>Singles tiebreak</span><span id="board-end"></span></div>
+        <div class="board-team" id="board-you"><i></i><span>You</span><strong id="board-your-score">0</strong></div>
+        <div class="board-team" id="board-rival"><i></i><span>Opponent</span><strong id="board-rival-score">0</strong></div>
+        <button type="button" id="board-details" title="Open scoreboard and point log"><span id="board-state"></span>${icon('chart', 13)}</button>
+      </div>
       <div class="mobile-drawers">
         <button type="button" data-drawer="session" aria-expanded="false" aria-controls="session-rail">${icon('target', 16)} Session</button>
         <button type="button" data-drawer="forces" aria-expanded="false" aria-controls="force-rail">${icon('chart', 16)} Forces</button>
@@ -56,12 +64,14 @@ const training = `
         <div class="section-kicker">${icon('target', 16)} <span id="practice-heading">Practice session</span></div>
         <h1 id="drill-title">Forehand Fundamentals</h1>
         <p class="hud-copy" id="drill-description"></p>
-        <div class="session-score">
+        <div class="session-score" id="drill-score">
           <div class="score-heading"><span id="score-label">Target hits</span><span class="score-value"><strong id="score-current">0</strong><span id="score-goal"> / 5</span></span></div>
           <div class="progress-segments" id="score-segments" role="progressbar" aria-labelledby="score-label" aria-valuemin="0" aria-valuenow="0" aria-valuemax="5"></div>
           <div class="score-meta"><span id="attempts">0 attempts</span><span id="best">Best 0 / 5</span></div>
         </div>
         <div class="session-settings">
+          <label class="setting-label match-opponent" for="match-pace" id="opponent-settings" hidden>Opponent
+            <span class="select-shell"><select id="match-pace">${options(Object.fromEntries(Object.entries(OPPONENTS).map(([key, value]) => [key, value.label])))}</select>${icon('chevron', 13)}</span></label>
           <div class="setting-row"><span class="setting-label" id="shot-label">Stroke</span>
             <div class="segmented" role="group" aria-labelledby="shot-label">${shotOptions}</div>
           </div>
@@ -78,6 +88,7 @@ const training = `
         </div>
         <a class="quiet-link" id="study-drill" href="#technique">Study the motion ${icon('right', 15)}</a>
         <a class="quiet-link" id="return-ntrp" href="#ntrp"><span>NTRP Skill Path</span> ${icon('right', 15)}</a>
+        <button class="report-action" id="open-report" type="button" disabled>${icon('chart', 16)} Session review</button>
       </aside>
 
       <aside class="hud-panel hud-right force-panel" id="force-rail" aria-labelledby="force-title">
@@ -99,6 +110,7 @@ const training = `
         <div class="court-cue" id="court-cue" hidden>
           <div class="court-cue-text"><strong id="cue-title"></strong><span id="cue-detail"></span></div>
           <div id="timing-track" class="timing-track" aria-hidden="true" hidden><span></span><i></i></div>
+          <button type="button" id="finish-review" class="text-button" hidden>Review session ${icon('right', 14)}</button>
         </div>
       </div>
       <div class="shot-telemetry" id="telemetry" hidden><span>Last shot</span><strong id="telemetry-speed"></strong><small id="telemetry-extra"></small><small id="telemetry-timing"></small></div>
@@ -119,7 +131,7 @@ const training = `
             <button data-move="down" type="button" aria-label="Move back">${icon('down', 19)}</button>
             <button data-move="right" type="button" aria-label="Move right">${icon('next', 19)}</button>
           </div>
-          <div class="touch-actions"><button id="touch-split" type="button">Split</button><button id="touch-swing" class="touch-swing" type="button">Swing</button></div>
+          <div class="touch-actions"><button id="quiet-play" type="button" aria-label="Start practice">${icon('play', 15)}</button><button id="touch-split" type="button">Split</button><button id="touch-swing" class="touch-swing" type="button">Swing</button></div>
         </div>
         <div class="training-dock">
           <div class="session-actions">
@@ -135,6 +147,7 @@ const training = `
           <span><kbd>Shift</kbd> Split</span><span>${icon('pointer', 14)} Aim with pointer</span><span><kbd>C</kbd> Camera</span>
         </div>
       </div>
+      ${reportMarkup()}
     </div>
   </section>`
 
@@ -142,7 +155,7 @@ const techniques = `
   <section class="page-view" id="technique-view" aria-label="Technique Lab" hidden>
     <div class="court-panel lab-panel" id="lab-panel">
       <div class="court-stage lab-stage"><div class="court-viewport" id="lab-canvas"><div class="world-labels" aria-label="Interactive body markers"></div></div></div>
-      <div class="stage-top"><div class="stage-id"><span class="court-badge"><i></i> Motion capture</span><span class="court-location">Technique Lab</span></div>
+      <div class="stage-top"><div class="stage-id"><span class="court-badge"><i></i> Motion study</span><span class="court-location">Technique Lab</span></div>
         ${tools('lab-angle', 'Technique camera', LAB_CAMERAS, 'lab-panel')}
       </div>
       ${orbit('lab-orbit')}
@@ -213,14 +226,14 @@ const guide = `
       </div>
       <div class="chart-table-shell"><table class="chart-table">
         <caption class="sr-only">Modeled flight and bounce comparison</caption>
-        <thead><tr><th scope="col">Shot</th><th scope="col">Spin</th><th scope="col">Net clearance</th><th scope="col">Bounce height</th><th scope="col">Wind drift</th></tr></thead>
+        <thead><tr><th scope="col">Shot</th><th scope="col">Spin at launch → bounce</th><th scope="col">Net clearance</th><th scope="col">Bounce height</th><th scope="col">Wind drift</th></tr></thead>
         <tbody id="flight-values"></tbody>
       </table></div>
       <p class="model-note">Solid lines show the first flight. Dashed lines show the bounce. Crosswinds are 4.5 m/s. The surface and aerodynamic coefficients are illustrative, and the model treats the ball as rigid.</p>
       <details class="flight-explanation">
         <summary>Why the flight paths differ</summary>
         <p>Gravity pulls every ball downward. Topspin adds a downward Magnus force, so a higher launch can still dip into court. Backspin adds lift. The slice shown here launches lower and slower, which gives it a low, skidding bounce.</p>
-        <p>Drag grows with the ball’s speed relative to the air. At impact, the surface absorbs some vertical speed and grip reduces horizontal speed. Compare bounce heights on clay and grass while keeping wind constant.</p>
+        <p>Drag opposes the ball’s motion through the air. Spin force acts across that airflow. At a bounce, friction acts against the slip where the ball meets the ground. A skidding ball loses forward speed and gains topspin. A ball with strong forward spin can kick ahead. Compare the spin before and after a bounce on clay and grass.</p>
       </details>
       <details class="flight-explanation">
         <summary>How the force readouts are calculated</summary>
@@ -231,12 +244,12 @@ const guide = `
     <div class="guide-grid">
       <section class="guide-card guide-topic"><span class="topic-icon theme-lime">${icon('court', 22)}</span><h2>Read the court</h2>
         <p>A singles court measures <strong>23.77 × 8.23 m</strong>. The doubles alleys take it to 10.97 m wide. The net is 0.914 m high at center and 1.07 m at its supports. The service line sits 6.40 m from the net.</p>
-        <p>Serve behind the baseline and land the first bounce in the diagonally opposite service box. A ball that touches a boundary line counts as in.</p>
-        <a class="quiet-link" href="#training" data-open-drill="serve">Try Serve Placement ${icon('right', 16)}</a>
+        <p>Serve behind the baseline into the diagonal box. A ball touching the line is in. A serve that clips the tape and lands in the correct box is a let. Replay the same serve.</p>
+        <a class="quiet-link" href="#match" data-open-drill="match">Play a singles tiebreak ${icon('right', 16)}</a>
       </section>
       <section class="guide-card guide-topic"><span class="topic-icon theme-blue">${icon('steps', 22)}</span><h2>Move before you swing</h2>
         <p>Split as the opponent strikes, push in the direction of the ball, and use small adjustment steps to get the spacing right. For a groundstroke, give the racket room beside you and in front.</p>
-        <p>Recover toward the space between the opponent’s likely replies. The center mark is a useful starting reference for a neutral feed.</p>
+        <p>Recover between the opponent’s likely replies. In a tiebreak the two blue lines show the available angles. The ring marks a baseline position between them. Clay takes longer to brake on than hard court.</p>
         <a class="quiet-link" href="#training" data-open-drill="footwork">Try Footwork &amp; Recovery ${icon('right', 16)}</a>
       </section>
       <section class="guide-card guide-topic"><span class="topic-icon theme-amber">${icon('wind', 22)}</span><h2>Play the conditions</h2>
@@ -295,6 +308,7 @@ export function appMarkup(): string {
           <div><dt>Look around in Free orbit</dt><dd>Drag or use arrow keys while paused</dd></div>
         </dl>
         <p>On a touchscreen, use the direction buttons, Split, and Swing. Tap the far court to aim.</p>
+        <p>In a tiebreak, serve twice if needed and let the opponent’s serve bounce. Shoe marks show a receiving stance. The blue ring covers the next reply. Select the scoreboard to review a point or replay a shot.</p>
         <button class="primary-button close-help" type="submit">Back to court ${icon('right', 16)}</button>
       </form>
     </dialog>

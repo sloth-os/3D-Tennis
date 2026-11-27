@@ -39,6 +39,18 @@ The 1.0 starting stage follows the USTA characteristics chart. The USTA’s curr
 | Footwork & Recovery | Split as the feeder hits, move to the ball, return it in bounds, and recover into the center ring. |
 | Rally Builder | Keep six consecutive shots in the singles court against the moving feeder. |
 
+## Singles tiebreak
+
+Choose **Tiebreak** in the training dock or open **#match**. You serve the opening point. Service then changes every two points, the service box alternates, and the first player to reach seven with a two-point lead wins. At each six-point change of ends the court turns around and the crosswind changes direction relative to the player. The view stays behind your end.
+
+Choose a club player, competitor, or expert before starting. The opponent reads the flight, accelerates toward a reachable contact, and can be beaten by the second bounce. Wide shots increase the distance the opponent has to cover. Under pressure the opponent takes pace off the reply and loses accuracy. You can leave an awkward toss untouched and toss again, take a rally ball on the volley, or let a doubtful ball land. A first fault earns a second serve. A net-cord serve that lands in the correct box repeats the same serve.
+
+With **Guides** on, the amber mark predicts the bounce and blue shoe marks suggest a stance. After your shot, the blue lanes and recovery ring show how to cover the opponent’s likely angles. Hard, clay, and grass have different traction. The split-step briefly unloads both feet, followed by a landing and a push toward the ball.
+
+Open **Session review** in a drill or the **scoreboard** in a match. Select a landing or choose a shot to compare actual placement with intended aim, read the line call, and replay both players from that exchange. The chart keeps the latest 32 strikes in the current session. The match scorecard includes the point log, first-serve percentage, aces, double faults, winners, and distance covered. Completed match wins and losses are saved on the device.
+
+### Controls
+
 - Move with **W A S D** or the arrow keys. Swing with **Space** when the contact indicator turns green. Use **Shift** to split-step and **P** to start or pause.
 - Click or tap the far court to aim. Use **Q / E** to adjust left and right or **R / F** to adjust depth.
 - On a touchscreen, use the direction, Swing, and Split buttons below the court. Start and pause from the same panel.
@@ -49,7 +61,7 @@ The 1.0 starting stage follows the USTA characteristics chart. The USTA’s curr
 
 **Force Analysis** shows the same gravity, air drag, and Magnus forces used by the flight solver. The impact channel calculates impulse from the ball’s change in momentum. Average force divides that impulse by the modeled contact duration. Energy change refers to translational kinetic energy. The body view estimates ground reaction from the acceleration of a pose-defined center of mass for a 75 kg reference athlete. Muscle highlights illustrate functional roles through the stroke. The body model and contact durations are illustrative.
 
-**Field Guide** compares flight and rebound under different surfaces and crosswinds. The game integrates ball flight at 120 steps per second in SI units. Bounce uses separate restitution and horizontal grip values. Slice serves add sidespin.
+**Field Guide** compares flight and rebound under different surfaces and crosswinds. The game integrates ball flight at 120 steps per second in SI units. Drag opposes relative airflow and Magnus force acts perpendicular to it. At ground contact a friction-limited impulse couples forward speed to topspin using a hollow-shell ball approximation. Line calls use a circular ground-contact footprint with a modeled radius of 14 mm. A graze on the top cable can cross the net. Slice serves add sidespin.
 
 ## Research basis
 
@@ -57,6 +69,7 @@ The 1.0 starting stage follows the USTA characteristics chart. The USTA’s curr
 - The motion lessons use stroke preparation and kinetic-chain concepts from Bruce Elliott’s review. [Biomechanics and Tennis](https://pubmed.ncbi.nlm.nih.gov/16632567/)
 - The ball-flight demonstration uses Rod Cross’s discussion of spin and the racket–ball interaction. [Physics of Tennis](https://www.physics.usyd.edu.au/~cross/tennis.html)
 - The split-step lesson uses observed timing around the opponent’s stroke. [Split-Step Timing of Professional and Junior Tennis Players](https://doi.org/10.1515/hukin-2017-0009)
+- The offline park panorama uses Alexander Scholten’s *Evening Meadow*. The grass verge uses Charlotte Baglioni’s *Grass Ground*. Both assets are available under CC0. [Evening Meadow](https://polyhaven.com/a/evening_meadow) · [Grass Ground](https://polyhaven.com/a/grass_ground) · [Poly Haven license](https://polyhaven.com/license)
 
 ## Publish to GitHub Pages
 

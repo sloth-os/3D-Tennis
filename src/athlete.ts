@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import type { Technique, Vec3 } from './config.ts'
+import { clamp, type Technique, type Vec3 } from './config.ts'
 import { GRIP_TO_STRINGS, samplePose, type MuscleGroup, type Pose } from './motion.ts'
 import { MuscleRig } from './muscle-rig.ts'
 import { canvasTexture } from './venue.ts'
@@ -149,28 +149,43 @@ export class Athlete {
       upper: segment(this.root, this.skin, .064, .047),
       elbow: oval(this.root, this.skin, .047, .047, .047),
       forearm: segment(this.root, this.skin, .046, .030),
+      wristband: segment(this.root, this.trim, .036, .034),
       palm: oval(this.root, this.skin, .041, .052, .037),
     }
   }
 
   private makeLeg() {
+    const shoe = oval(this.root, this.shoes, .064, .054, .139)
+    const stitches: number[] = []
+    for (const z of [-.32, -.12, .08]) {
+      stitches.push(-.38, .88, z, .38, .89, z + .11, .38, .88, z, -.38, .89, z + .11)
+    }
+    shoe.add(new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(stitches, 3)),
+      new THREE.LineBasicMaterial({ color: 0x6d808b })))
     return {
       shorts: segment(this.root, this.shorts, .100, .082),
       thigh: segment(this.root, this.skin, .077, .054),
       knee: oval(this.root, this.skin, .058, .059, .055),
       calf: segment(this.root, this.skin, .061, .038),
       sock: segment(this.root, this.shoes, .044, .044),
-      shoe: oval(this.root, this.shoes, .064, .054, .139),
+      shoe,
       sole: oval(this.root, this.trim, .066, .022, .14),
     }
   }
 
   private buildRacket(): void {
     const hoopMaterial = material(0xb9d545)
-    const grip = mesh(new THREE.CylinderGeometry(.021, .024, .17, 10), material(0x263630), this.racket)
-    grip.position.y = .037
-    const shaft = mesh(new THREE.CylinderGeometry(.012, .015, .192, 9), hoopMaterial, this.racket)
-    shaft.position.y = .162
+    const grip = mesh(new THREE.CylinderGeometry(.020, .024, .188, 8), material(0x28332e), this.racket)
+    grip.position.y = .035
+    const wrap = Array.from({ length: 108 }, (_, i) => {
+      const t = i / 107, a = t * Math.PI * 16
+      return new THREE.Vector3(Math.cos(a) * (.024 - .004 * t), -.054 + .18 * t, Math.sin(a) * (.024 - .004 * t))
+    })
+    this.racket.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(wrap), new THREE.LineBasicMaterial({ color: 0x7b8c77 })))
+    for (const sign of [-1, 1]) {
+      const throat = segment(this.racket, hoopMaterial, .012, .009)
+      putBetween(throat, new THREE.Vector3(sign * .009, .128, 0), new THREE.Vector3(sign * .087, GRIP_TO_STRINGS - .115, 0))
+    }
     const head = mesh(new THREE.TorusGeometry(.125, .0105, 8, 32), hoopMaterial, this.racket)
     head.scale.y = 1.30
     head.position.y = GRIP_TO_STRINGS
@@ -199,7 +214,7 @@ export class Athlete {
     this.shirt.rotation.set(.08, chestYaw, -lean)
     this.neck.position.copy(point(pose.neck))
     this.head.position.copy(point(pose.head))
-    this.head.rotation.y = chestYaw * .28
+    this.head.rotation.set(0, chestYaw * .28, 0)
 
     this.muscleRig.root.visible = !!anatomy
     for (const [coat, uniform] of this.sportsCoats) coat.color.setHex(anatomy ? 0x59617a : uniform)
@@ -216,6 +231,7 @@ export class Athlete {
       putBetween(arm.upper, sleeveEnd, b)
       arm.elbow.position.copy(b)
       putBetween(arm.forearm, b, c)
+      putBetween(arm.wristband, b.clone().lerp(c, .77), b.clone().lerp(c, .92))
       arm.palm.position.copy(c)
       points.push(a, b, c)
 
@@ -247,5 +263,11 @@ export class Athlete {
       positions.needsUpdate = true
       this.dots.forEach((dot, index) => dot.position.copy(points[index]))
     }
+  }
+
+  trackBall(local: Vec3) {
+    const deltaX = local.x - this.head.position.x, deltaZ = local.z - this.head.position.z
+    this.head.rotation.y = clamp(Math.atan2(-deltaX, -deltaZ), -.78, .78)
+    this.head.rotation.x = clamp(Math.atan2(local.y - this.head.position.y, Math.hypot(deltaX, deltaZ)), -.46, .55)
   }
 }

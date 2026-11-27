@@ -3,7 +3,7 @@ import type { Vec3 } from './config.ts'
 import { MUSCLES, magnitude, type MuscleGroup } from './motion.ts'
 
 import { FORCE_COLORS } from './analysis-colors.ts'
-export type LabelKey = 'target' | 'contact' | 'gravity' | 'drag' | 'magnus' | 'impact' | 'partner' | 'recovery' | 'net-player' | MuscleGroup
+export type LabelKey = 'target' | 'contact' | 'gravity' | 'drag' | 'magnus' | 'impact' | 'partner' | 'recovery' | 'stance' | 'landing' | 'net-player' | MuscleGroup
 export interface WorldLabel { key: LabelKey; text: string; position: Vec3 }
 export type BodyState = ReturnType<typeof import('./motion.ts').analyzeMotion>
 export type FlightForces = ReturnType<typeof import('./physics.ts').flightForces>
@@ -144,6 +144,7 @@ export class WorldAnalysis {
 
   project(labels: WorldLabel[], camera: THREE.Camera, width: number, height: number) {
     const used = new Set<LabelKey>()
+    const placed: { x: number; y: number; half: number }[] = []
     for (const { key, text, position } of labels) {
       if (used.has(key)) continue
       used.add(key)
@@ -163,7 +164,14 @@ export class WorldAnalysis {
       node.hidden = projected.z < -1 || projected.z > 1 || x < 34 || x > width - 34 || y < 32 || y > height - 100
       if (!node.hidden) {
         if (node.textContent !== text) node.textContent = text
-        node.style.transform = `translate3d(${Math.round(x)}px,${Math.round(y)}px,0) translate(-50%,-100%)`
+        const half = Math.min(width / 2 - 4, text.length * (width < 650 ? 2.55 : 2.95) + 12)
+        const left = Math.min(width - half - 4, Math.max(half + 4, x))
+        let top = y
+        for (let count = 0; count < placed.length && placed.some(other => Math.abs(other.x - left) < other.half + half + 4 && Math.abs(other.y - top) < 22); count++) top -= 23
+        if (top < 24) { node.hidden = true; continue }
+        placed.push({ x: left, y: top, half })
+        node.style.setProperty('--leader', Math.round(y - top + 9) + 'px')
+        node.style.transform = `translate3d(${Math.round(left)}px,${Math.round(top)}px,0) translate(-50%,-100%)`
       }
     }
     for (const [key, node] of this.labelNodes) if (!used.has(key)) node.hidden = true

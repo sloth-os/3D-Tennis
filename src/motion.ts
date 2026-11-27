@@ -154,7 +154,7 @@ export const MOTION_DURATION: Record<Technique, number> = {
   forehand: 2.2, backhand: 2.25, serve: 2.4, footwork: 1.85, volley: 1.5, backhandVolley: 1.55,
   halfVolley: 1.65, overhead: 2.15, lob: 2.0, drop: 1.85,
 }
-export const GRIP_TO_STRINGS = .362
+export const GRIP_TO_STRINGS = .45
 
 export const vec = (x = 0, y = 0, z = 0): Vec3 => ({ x, y, z })
 export const add = (a: Vec3, b: Vec3) => vec(a.x + b.x, a.y + b.y, a.z + b.z)
@@ -215,7 +215,7 @@ export interface Pose {
   travel: number
 }
 
-interface MotionOptions { movement?: number; depth?: number; run?: number; dip?: number; racketTarget?: Vec3 }
+interface MotionOptions { movement?: number; depth?: number; run?: number; split?: number; racketTarget?: Vec3 }
 
 function pulse(time: number, from: number, to: number) {
   return Math.sin(Math.PI * clamp((time - from) / (to - from), 0, 1)) ** 2
@@ -229,21 +229,25 @@ export function samplePose(technique: Technique, progress: number, options: Moti
   const b = frames[i]
   const value = (fn: (frame: Frame) => number) => curve(frames[i - 2] ?? a, a, b, frames[i + 1] ?? b, t, fn)
   const point = (key: 'hand' | 'elbow' | 'free' | 'racket') => vec(value(f => f[key][0]), value(f => f[key][1]), value(f => f[key][2]))
-  const dip = options.dip ?? 0
-  const hipsY = value(f => f.hips) - dip
+  const split = options.split ?? 1
+  const splitLift = .10 * pulse(split, .065, .205)
+  const dip = .045 * pulse(split, 0, .085) + .095 * pulse(split, .19, .37)
+  const hipsY = value(f => f.hips) - dip + splitLift
   const hipYaw = value(f => f.hipYaw)
   const chestYaw = value(f => f.chestYaw)
   const stride = value(f => f.stride ?? 0)
   const sideways = options.movement ?? 0
   const upcourt = options.depth ?? 0
   const lean = clamp(sideways, -1, 1) * .10
-  const runCycle = Math.sin(options.run ?? 0) * Math.min(1, Math.hypot(sideways, upcourt))
+  const strideAngle = options.run ?? 0
+  const effort = Math.min(1, Math.hypot(sideways, upcourt))
+  const runCycle = Math.sin(strideAngle) * effort
   const hop = technique === 'serve' ? .17 * pulse(t, .47, .75)
     : technique === 'overhead' ? .098 * pulse(t, .49, .74) : technique === 'footwork' ? .115 * pulse(t, .10, .34) : 0
   const travel = technique === 'footwork' ? .44 * pulse(t, .44, 1) : 0
   const weightShift = technique === 'forehand' ? -.10 * pulse(t, .43, .95) + .05 * pulse(t, .16, .54)
     : technique === 'backhand' ? .09 * pulse(t, .43, .94) : travel
-  const hips = vec(lean * .3 + weightShift, hipsY, -stride * .27)
+  const hips = vec(lean * .3 + weightShift, hipsY - .045 * effort + Math.abs(runCycle) * .021, -stride * .27)
   const torso = add(hips, vec(lean * .52, .245, -stride * .1))
   const neck = add(torso, vec(lean * .17, .25, -.014))
   const head = add(neck, vec(0, .149, -.005))
@@ -251,9 +255,10 @@ export function samplePose(technique: Technique, progress: number, options: Moti
   const armLengths = [.331, .299] as const
   const legLengths = [.447, .457] as const
 
-  function arm(sign: 1 | -1): Arm {
+  function arm(sign: 1 | -1, secondGrip?: Vec3): Arm {
     const shoulder = add(torso, rotateY(vec(sign * .218, .139, 0), chestYaw))
-    const target = add(point(sign > 0 ? 'hand' : 'free'), vec(lean + weightShift, -dip, 0))
+    let target = add(point(sign > 0 ? 'hand' : 'free'), vec(lean + weightShift, -dip + splitLift, 0))
+    if (secondGrip) target = mix(target, secondGrip, clamp((t - .045) / .15, 0, 1) * clamp((1 - t) / .14, 0, 1))
     const isHit = sign > 0 && options.racketTarget && t >= .59
     const wrist = isHit ? mix(target, subtract(options.racketTarget!, scale(shaft, GRIP_TO_STRINGS)), clamp(1 - (t - .62) * 10, 0, 1)) : target
     const elbowHint = sign > 0 ? add(point('elbow'), vec(lean + weightShift, -dip, 0))
@@ -264,16 +269,19 @@ export function samplePose(technique: Technique, progress: number, options: Moti
 
   function leg(sign: 1 | -1): Leg {
     const hip = add(hips, rotateY(vec(sign * .126, -.026, 0), hipYaw))
-    const lift = Math.max(0, runCycle * sign) * .14 + hop
+    const lift = Math.max(0, runCycle * sign) * .17 + hop + splitLift
     const footTravel = technique === 'footwork' ? travel * (sign > 0 ? 1.5 : .52) : 0
-    const target = vec(sign * (.236 + Math.abs(stride) * .39) + footTravel + runCycle * sideways * .24,
-      .125 + lift, sign * stride + runCycle * sign * upcourt * .32 - .054 * pulse(t, .53, .94))
+    const step = Math.cos(strideAngle) * sign
+    const splitWidth = .075 * pulse(split, .08, .39)
+    const target = vec(sign * (.236 + Math.abs(stride) * .39 + splitWidth) + footTravel + step * sideways * .27,
+      .125 + lift, sign * stride + step * upcourt * .34 - .054 * pulse(t, .53, .94))
     const kneeHint = add(mix(hip, target, .5), rotateY(vec(sign * .043, 0, -.44), hipYaw * .42))
     const result = articulated(hip, target, kneeHint, ...legLengths)
     return { hip, knee: result.mid, ankle: result.end, planted: result.end.y < .15, lengths: legLengths }
   }
 
-  const arms: Pose['arms'] = [arm(1), arm(-1)]
+  const hittingArm = arm(1)
+  const arms: Pose['arms'] = [hittingArm, arm(-1, technique === 'backhand' ? add(hittingArm.hand, scale(shaft, .083)) : undefined)]
   return { hips, torso, neck, head, hipYaw, chestYaw, lean, arms, legs: [leg(1), leg(-1)], shaft,
     racketHead: add(arms[0].hand, scale(shaft, GRIP_TO_STRINGS)), travel }
 }

@@ -11,9 +11,9 @@ export const COURT = {
 } as const
 
 export const SURFACES = {
-  hard: { label: 'Hard Court', restitution: 0.74, grip: 0.78, paint: 0x3c6492, apron: 0x416b6b },
-  clay: { label: 'Clay Court', restitution: 0.78, grip: 0.64, paint: 0xa45132, apron: 0x80573b },
-  grass: { label: 'Grass Court', restitution: 0.57, grip: 0.88, paint: 0x587140, apron: 0x4c653b },
+  hard: { label: 'Hard Court', restitution: 0.74, friction: .27, paint: 0x38689b, apron: 0x3e7169 },
+  clay: { label: 'Clay Court', restitution: 0.78, friction: .39, paint: 0xac5333, apron: 0x80573b },
+  grass: { label: 'Grass Court', restitution: 0.57, friction: .185, paint: 0x627d48, apron: 0x4c653b },
 } as const
 
 export const SHOTS = {
@@ -66,9 +66,15 @@ export const DRILLS = {
     cardDescription: 'Build a streak with a live opponent.', goal: 6, goalLabel: 'Best rally streak', shot: 'topspin',
     coach: 'Aim through the big part of the court. Recover toward the middle between shots.',
   },
+  match: {
+    title: 'Singles Tiebreak', icon: 'trophy', theme: 'amber',
+    description: 'Serve, return and play out each point against a moving opponent. First to seven, win by two.',
+    cardDescription: 'Play a singles tiebreak.', goal: 7, goalLabel: 'Your points', shot: 'topspin',
+    coach: 'Push your opponent wide, recover across the likely replies, then change direction into the open court.',
+  },
 } as const
 
-export const DRILL_ORDER: DrillId[] = ['forehand', 'serve', 'footwork', 'rally']
+export const DRILL_ORDER: DrillId[] = ['forehand', 'serve', 'footwork', 'rally', 'match']
 
 export function targetFor(drill: DrillId, adSide: boolean): Zone {
   if (drill === 'serve') {

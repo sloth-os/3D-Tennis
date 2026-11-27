@@ -126,7 +126,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   --left: clamp(235px, 19.6vw, 290px);
   --right: clamp(225px, 19vw, 278px);
   position: relative;
-  height: max(730px, calc(100dvh - var(--header)));
+  height: max(410px, calc(100dvh - var(--header)));
   isolation: isolate;
   overflow: hidden;
   background: radial-gradient(ellipse at 51% 47%, #283949, #131d2a);
@@ -198,7 +198,7 @@ select option { background: #172133; color: var(--text); }
   --marker: var(--cyan);
 }
 .world-label::before { position: absolute; left: 6px; top: 7px; width: 4px; height: 4px; content: ''; background: var(--marker); transform: rotate(45deg); }
-.world-label::after { position: absolute; top: 100%; left: calc(50% - .5px); width: 1px; height: 10px; content: ''; background: var(--marker); }
+.world-label::after { position: absolute; top: 100%; left: calc(50% - .5px); width: 1px; height: var(--leader, 10px); content: ''; background: var(--marker); pointer-events: none; }
 .world-label:hover { color: var(--marker); border-color: var(--marker); }
 .world-label[data-marker="target"], .world-label[data-marker="contact"] { --marker: var(--lime); }
 .world-label[data-marker="arm"], .world-label[data-marker="impact"] { --marker: #ff9f75; }
@@ -488,7 +488,7 @@ body:has(.immersive) { overflow: hidden; }
   .header-actions { grid-column: 2; grid-row: 1; gap: 4px; }
   .header-actions .icon-button { width: 29px; height: 29px; }
   .connection { gap: 3px; font-size: 9px; margin-right: 2px; }
-  .court-panel { --inset: 9px; height: max(592px, calc(100dvh - var(--header))); }
+  .court-panel { --inset: 9px; height: max(406px, calc(100dvh - var(--header))); }
   .court-panel::after { background: linear-gradient(0deg, #080f19 1%, #080f19e6 14%, #080f1966 27%, transparent 46%, transparent 78%, #09111ba8); }
   .stage-top { top: 9px; }
   .stage-id, .stage-tools { gap: 4px; }
@@ -631,4 +631,139 @@ body:has(.immersive) { overflow: hidden; }
 @media (max-width: 355px) {
   .main-nav a { gap: 2px; }
   .main-nav a svg { display: none; }
+}
+
+/* Match scoring and the courtside review. */
+.rebound-spin { display: block; color: #a9c7b8; font-size: .92em; }
+.wind-readout { padding: 4px 6px; border-radius: 4px; color: #d2e8e8; background: #132a30dc; font: 700 9px var(--mono); }
+.court-panel::after {
+  background: linear-gradient(90deg, #0b14235e, transparent 27% 73%, #0b142358),
+    linear-gradient(0deg, #0a131fef 0%, #0b14238c 9%, transparent 24% 83%, #0a14284a);
+}
+.match-board {
+  position: absolute; z-index: 4; top: 18px; left: 50%; transform: translateX(-50%);
+  width: 209px; overflow: hidden; border: 1px solid #bcd4c970; border-radius: 8px;
+  background: #122327f2; color: #f5f6ec; box-shadow: 0 6px 23px #08131d4d;
+}
+.board-caption, .board-team, .match-board button { display: flex; align-items: center; }
+.board-caption { justify-content: space-between; padding: 5px 9px; background: #dceab6; color: #20362c; font: 750 9px var(--mono); letter-spacing: .045em; text-transform: uppercase; }
+.board-caption span:last-child { font-size: 8px; font-weight: 600; }
+.board-team { height: 26px; gap: 7px; padding: 0 9px; border-bottom: 1px solid #dfefd61e; font-weight: 750; font-size: 12px; }
+.board-team i { width: 6px; height: 6px; border-radius: 50%; }
+.board-team[data-server="true"] i { background: var(--lime); }
+.board-team strong { margin-left: auto; width: 29px; height: 100%; display: grid; place-items: center; background: #d9edba13; color: #f3f7dd; font: 700 18px var(--heading); }
+.match-board button { width: 100%; justify-content: space-between; gap: 4px; padding: 5px 9px; border: 0; background: #132029; color: #d4e4d8; font: 650 10px var(--heading); }
+.match-board button:hover { color: var(--lime); }
+.match-opponent { margin: 12px 0 10px; }
+.match-opponent .select-shell { display: flex; margin-top: 3px; }
+.report-action {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 6px 10px; border: 1px solid #a8c9c45c;
+  border-radius: 5px; background: #293b43ac; color: #ddeddf; font-size: 12px; font-weight: 750;
+}
+.report-action:hover:enabled { color: var(--lime); border-color: var(--lime); }
+.session-panel > .report-action { width: 100%; margin-top: 10px; }
+#finish-review { padding: 6px 0 0; color: var(--lime); }
+.quiet-hud .match-board { display: none; }
+.touch-actions #quiet-play { display: none; }
+@media (pointer: coarse), (max-width: 670px) {
+  #training-panel.quiet-hud .game-console { display: block; }
+  #training-panel.quiet-hud .training-dock, #training-panel.quiet-hud .input-hints { display: none; }
+  #training-panel.quiet-hud #quiet-play { display: grid; }
+}
+.world-label[data-marker="recovery"] { --marker: #a4e5f1; }
+.world-label[data-marker="landing"] { --marker: #f6d39d; }
+.report-dialog {
+  width: min(680px, calc(100% - 25px)); max-height: calc(100dvh - 30px); padding: clamp(15px, 2.7vw, 26px);
+  border: 1px solid #809795; border-radius: 12px; color: var(--text); background: #131e29; box-shadow: 0 25px 80px #040a148a;
+}
+.report-dialog::backdrop { background: #07141bd6; backdrop-filter: blur(3px); }
+.report-head, .result-strip { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.report-head h2 { margin: 4px 0 0; font: 700 clamp(24px, 3vw, 32px)/1 var(--heading); letter-spacing: -.04em; }
+.report-head .section-kicker { color: var(--lime); }
+.result-strip { margin-top: 15px; padding: 10px 14px; border-left: 3px solid var(--lime); background: #233837; }
+.result-strip strong, .result-strip small { display: block; }
+.result-strip strong { font: 700 17px var(--heading); }
+.result-strip small { margin-top: 3px; color: #c2d4ce; font-size: 11px; }
+.result-strip b { white-space: nowrap; color: var(--lime); font: 700 32px var(--heading); }
+.result-strip em { color: #92a6a2; font-style: normal; }
+.report-grid { display: grid; grid-template-columns: 1.12fr 1fr; gap: 18px; margin-top: 17px; }
+.report-grid h3 { margin-bottom: 8px; font: 650 16px var(--heading); }
+.shot-map canvas { display: block; width: 100%; height: auto; border-radius: 5px; cursor: crosshair; }
+.map-key { display: flex; justify-content: center; gap: 15px; margin-top: 5px; color: #bbcccf; font-size: 10px; }
+.map-key span { display: inline-flex; align-items: center; gap: 4px; }
+.map-key i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #dff576; }
+.map-key b { color: #ffae83; font-size: 12px; }
+.map-key span:last-child b { color: white; }
+.shot-inspector .select-shell { width: 100%; padding-left: 0; border: 1px solid var(--edge); background: #1b2a38; }
+.shot-data > div { display: flex; justify-content: space-between; gap: 6px; padding: 6px 0; border-bottom: 1px solid #9fb4bd2b; font-size: 12px; }
+.shot-data span, #shot-empty, #report-line { color: #bdcbd5; }
+#report-line, #shot-empty { margin: 7px 0; font-size: 12px; line-height: 1.5; }
+.shot-inspector .report-action { margin-top: 4px; }
+.coach-recap { margin-top: 15px; border-top: 1px solid var(--edge); padding-top: 12px; }
+.coach-recap p { margin-top: 4px; color: #dce6e8; font-size: 13px; line-height: 1.5; }
+.report-stats, .point-history { margin-top: 10px; color: #d1e0dd; font-size: 12px; }
+.report-dialog summary { cursor: pointer; padding: 4px 0; font-weight: 750; color: #d4eac8; }
+.report-stats table { width: 100%; border-collapse: collapse; }
+.report-stats th, .report-stats td { padding: 4px; text-align: right; border-bottom: 1px solid #415259; font-variant-numeric: tabular-nums; }
+.report-stats th:first-child { text-align: left; font-weight: 550; }
+.point-history ol { margin: 0; padding: 0; list-style: none; max-height: 170px; overflow: auto; }
+.point-history li { display: grid; grid-template-columns: 39px 1fr auto; gap: 6px; padding: 5px 0; border-bottom: 1px solid #415259; }
+.point-history b { color: var(--lime); }
+.point-history small { color: #b2c4c8; }
+@media (min-width: 891px) {
+  .session-panel { overflow: auto; max-height: calc(100% - 210px); }
+}
+@media (min-width: 671px) and (max-width: 940px) {
+  .training-dock { grid-template-columns: auto 1fr auto; gap: 5px; }
+  .drill-card { min-width: 0; padding-inline: 5px; gap: 3px; }
+  .court-options { gap: 4px; }
+}
+@media (max-width: 670px) {
+  .drill-gallery { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .drill-card { height: 37px; gap: 3px; }
+  .match-board { left: auto; right: var(--inset); top: 47px; width: 132px; transform: none; }
+  .board-caption { padding: 4px 6px; font-size: 8px; }
+  .board-caption span:last-child { display: none; }
+  .board-team { height: 20px; padding-inline: 6px; font-size: 10px; }
+  .board-team strong { font-size: 14px; width: 21px; }
+  .match-board button { min-height: 28px; padding: 4px 6px; }
+  #training-panel[data-orbit="true"] .match-board { top: 86px; }
+  .touch-controls button { min-height: 44px; min-width: 42px; }
+  .touch-actions .touch-swing { min-width: 61px; }
+}
+@media (max-width: 480px) {
+  .report-dialog { max-height: calc(100dvh - 18px); }
+  .report-grid { gap: 12px; grid-template-columns: 1fr; }
+  .shot-map canvas { max-height: 220px; width: auto; max-width: 100%; margin-inline: auto; }
+  .shot-data { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+  .shot-data > div { flex-direction: column; gap: 1px; }
+}
+@media (max-width: 355px) {
+  .drill-card { flex-direction: column; gap: 1px; font-size: 9px; }
+  .report-dialog { padding: 12px; }
+}
+@media (max-height: 580px) and (min-aspect-ratio: 3/2) {
+  :root { --header: 42px; }
+  .header-inner { min-height: 41px; grid-template-columns: 1fr auto 1fr; gap: 4px; padding: 0 8px; }
+  .brand, .main-nav, .header-actions { grid-column: auto; grid-row: auto; }
+  .brand-mark { width: 27px; height: 27px; }
+  .wordmark strong { font-size: 15px; }
+  .main-nav { min-height: 40px; }
+  .main-nav a { padding-inline: 7px; font-size: 10px; }
+  .court-panel { height: calc(100dvh - var(--header)); min-height: 0; --inset: 8px; }
+  .stage-top { top: 6px; }
+  .mobile-drawers { top: 43px; }
+  .hud-panel, .ntrp-panel .hud-panel { top: 75px; max-height: calc(100% - 145px); overflow: auto; }
+  .game-console { bottom: 4px; }
+  .training-dock { min-height: 39px; padding: 3px 6px; }
+  .drill-card, .session-actions .primary-button, .reset-button { min-height: 29px; height: 29px; }
+  .touch-controls { margin-bottom: 3px; }
+  .touch-controls button { min-height: 35px; }
+  .input-hints { display: none; }
+  .court-readout, .replay-console { bottom: 83px; }
+  .shot-telemetry { display: none; }
+  .match-board { top: 6px; width: 143px; }
+  .board-team { height: 16px; font-size: 10px; }
+  .board-team strong { font-size: 13px; }
+  .board-caption, .match-board button { padding-block: 3px; }
 }

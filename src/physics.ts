@@ -4,11 +4,14 @@ export const GRAVITY = 9.81
 export const BALL_MASS = 0.057
 const DRAG = 0.014
 const MAGNUS = 0.00016
+const RPM_TO_RAD = Math.PI / 30
+const SHELL_INERTIA = 2 / 3
 export const STEP = 1 / 120
 
 export interface Ball {
   position: Vec3
   velocity: Vec3
+  rotation: Vec3
   spin: number
   sideSpin: number
   bounces: number
@@ -19,7 +22,7 @@ export interface Conditions {
   wind: number
 }
 
-export type ContactKind = 'racket' | 'court' | 'net'
+export type ContactKind = 'racket' | 'court' | 'net' | 'tape'
 export interface Contact {
   kind: ContactKind
   position: Vec3
@@ -27,12 +30,12 @@ export interface Contact {
   after: Vec3
   duration: number
 }
-export type Impact = { kind: 'net' | 'bounce'; position: Vec3; contact: Contact }
+export type Impact = { kind: 'net' | 'cord' | 'bounce'; position: Vec3; contact: Contact }
 
 const BOUNCE_DURATION: Record<Surface, number> = { hard: .005, clay: .0065, grass: .0055 }
 
 export function contactAt(kind: ContactKind, position: Vec3, before: Vec3, after: Vec3, surface: Surface): Contact {
-  const duration = kind === 'racket' ? .005 : kind === 'net' ? .018 : BOUNCE_DURATION[surface]
+  const duration = kind === 'racket' ? .005 : kind === 'net' || kind === 'tape' ? .018 : BOUNCE_DURATION[surface]
   return { kind, position: { ...position }, before: { ...before }, after: { ...after }, duration }
 }
 
@@ -41,7 +44,7 @@ export function netHeight(x: number): number {
 }
 
 export function makeBall(position: Vec3, velocity: Vec3, spin = 0, sideSpin = 0): Ball {
-  return { position: { ...position }, velocity: { ...velocity }, spin, sideSpin, bounces: 0 }
+  return { position: { ...position }, velocity: { ...velocity }, rotation: { x: 0, y: 0, z: 0 }, spin, sideSpin, bounces: 0 }
 }
 
 export function speedOf(velocity: Vec3): number {
@@ -56,7 +59,10 @@ function aerodynamicAcceleration(ball: Ball, wind: number) {
   const drag = DRAG * Math.hypot(travelSpeed, velocity.y)
   const lift = clamp(-MAGNUS * spin * travelSpeed, -9, 9)
   const curl = MAGNUS * sideSpin
-  return { dragX: -drag * airX, dragY: -drag * velocity.y, dragZ: -drag * airZ, lift, curlX: curl * airZ, curlZ: -curl * airX }
+  // The spin force stays perpendicular to the relative airflow during rise and descent.
+  const tilt = travelSpeed > .001 ? -lift * velocity.y / (travelSpeed * travelSpeed) : 0
+  return { dragX: -drag * airX, dragY: -drag * velocity.y, dragZ: -drag * airZ, lift,
+    curlX: curl * airZ + tilt * airX, curlZ: -curl * airX + tilt * airZ }
 }
 
 export function flightForces(ball: Ball, wind: number) {
@@ -90,20 +96,40 @@ function integrate(ball: Ball, dt: number, wind: number): void {
 export function stepBall(ball: Ball, dt: number, conditions: Conditions, collideWithNet = true): Impact | null {
   const { position, velocity } = ball
   const previous = { ...position }
+  const horizontal = Math.hypot(velocity.x, velocity.z)
+  if (horizontal > .001) {
+    const turn = ball.spin * RPM_TO_RAD * dt / horizontal
+    ball.rotation.x += velocity.z * turn
+    ball.rotation.z -= velocity.x * turn
+  }
+  ball.rotation.y += ball.sideSpin * RPM_TO_RAD * dt
   integrate(ball, dt, conditions.wind)
   if (collideWithNet && previous.z * position.z <= 0 && previous.z !== position.z) {
     const fraction = previous.z / (previous.z - position.z)
     const x = previous.x + (position.x - previous.x) * fraction
     const y = previous.y + (position.y - previous.y) * fraction
-    if (Math.abs(x) <= COURT.postX && y < netHeight(x) + COURT.ballRadius) {
+    const height = netHeight(x)
+    if (Math.abs(x) <= COURT.postX && y < height + COURT.ballRadius) {
       const before = { ...velocity }
+      const point = { x, y, z: 0 }
+      // A grazing strike above the cable can deflect forward. A ball in the mesh falls back.
+      if (y > height + .002 && Math.abs(before.z) > 3) {
+        const graze = clamp((y - height) / COURT.ballRadius, 0, 1)
+        velocity.x *= .60 + .34 * graze
+        velocity.z *= .38 + .48 * graze
+        velocity.y = Math.max(.26, before.y * .5 + (1 - graze) * 2.3)
+        position.z = Math.sign(before.z) * COURT.ballRadius
+        position.y = height + COURT.ballRadius
+        ball.spin *= .78
+        ball.sideSpin *= .85
+        return { kind: 'cord', position: point, contact: contactAt('tape', point, before, velocity, conditions.surface) }
+      }
       position.z = Math.sign(previous.z || -velocity.z) * COURT.ballRadius
       velocity.z *= -0.19
       velocity.x *= 0.46
       velocity.y = Math.min(velocity.y, 0) - 0.6
       ball.spin *= 0.5
       ball.sideSpin *= 0.5
-      const point = { x, y, z: 0 }
       return { kind: 'net', position: point, contact: contactAt('net', point, before, velocity, conditions.surface) }
     }
   }
@@ -113,13 +139,20 @@ export function stepBall(ball: Ball, dt: number, conditions: Conditions, collide
     position.x = previous.x + (position.x - previous.x) * fraction
     position.z = previous.z + (position.z - previous.z) * fraction
     position.y = COURT.ballRadius
-    const { restitution, grip } = SURFACES[conditions.surface]
-    const spinKick = clamp(ball.spin / 42000, -0.055, 0.07)
+    const { restitution, friction } = SURFACES[conditions.surface]
+    const speed = Math.hypot(velocity.x, velocity.z)
+    const slip = speed - COURT.ballRadius * ball.spin * RPM_TO_RAD
+    const frictionLimit = friction * (1 + restitution) * -velocity.y
+    // Equal and opposite linear and angular impulses remove slip at the contact patch.
+    const change = clamp(slip * SHELL_INERTIA / (1 + SHELL_INERTIA), -frictionLimit, frictionLimit)
     velocity.y *= -restitution
-    velocity.x *= grip + spinKick
-    velocity.z *= grip + spinKick
-    ball.spin *= 0.63
-    ball.sideSpin *= 0.7
+    if (speed > .001) {
+      const ratio = (speed - change) / speed
+      velocity.x *= ratio
+      velocity.z *= ratio
+      ball.spin = (ball.spin + change / (SHELL_INERTIA * COURT.ballRadius * RPM_TO_RAD)) * Math.sign(ratio || 1)
+    }
+    ball.sideSpin *= .89
     ball.bounces += 1
     return { kind: 'bounce', position: { ...position }, contact: contactAt('court', position, before, velocity, conditions.surface) }
   }
@@ -160,12 +193,14 @@ export function shotBall(start: Vec3, aim: Aim, shot: Shot, serve: boolean, qual
 
 export interface FlightPoint extends Vec3 {
   t: number
+  bounces: number
 }
 
 export function traceBall(initial: Ball, conditions: Conditions, seconds = 2.4, stopAtFirstBounce = false) {
   const ball = { ...makeBall(initial.position, initial.velocity, initial.spin, initial.sideSpin), bounces: initial.bounces }
-  const points: FlightPoint[] = [{ ...ball.position, t: 0 }]
+  const points: FlightPoint[] = [{ ...ball.position, t: 0, bounces: ball.bounces }]
   let landing: Vec3 | null = null
+  let reboundSpin: number | null = null
   let net: Vec3 | null = null
   let bounceHeight = 0
   let apex = ball.position.y
@@ -179,15 +214,15 @@ export function traceBall(initial: Ball, conditions: Conditions, seconds = 2.4, 
       const y = previous.y + (ball.position.y - previous.y) * fraction
       if (Math.abs(x) <= COURT.postX) clearance = y - netHeight(x) - COURT.ballRadius
     }
-    if (impact?.kind === 'net') {
-      net = impact.position
+    if (impact?.kind === 'net' || impact?.kind === 'cord') {
+      if (impact.kind === 'net') net = impact.position
       clearance = impact.position.y - netHeight(impact.position.x) - COURT.ballRadius
     }
-    if (impact?.kind === 'bounce' && !landing) landing = impact.position
+    if (impact?.kind === 'bounce' && !landing) { landing = impact.position; reboundSpin = ball.spin }
     apex = Math.max(apex, ball.position.y)
     if (ball.bounces === initial.bounces + 1) bounceHeight = Math.max(bounceHeight, ball.position.y)
-    if (step % 3 === 0 || impact) points.push({ ...ball.position, t: (step + 1) * STEP })
+    if (step % 3 === 0 || impact) points.push({ ...ball.position, t: (step + 1) * STEP, bounces: ball.bounces })
     if ((stopAtFirstBounce && landing) || ball.bounces > initial.bounces + 1) break
   }
-  return { points, landing, net, apex, bounceHeight, clearance }
+  return { points, landing, net, apex, bounceHeight, clearance, reboundSpin }
 }
